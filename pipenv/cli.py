@@ -1326,8 +1326,8 @@ def pip_install(
     # Create files for hash mode.
     if (not ignore_hashes) and (r is None):
         tmp_fd, r = tempfile.mkstemp(prefix='pipenv-', suffix='-requirement.txt')
-        tmp_fd.write(package_name)
-        tmp_fd.close()
+        with os.fdopen(tmp_fd, 'w') as f:
+            f.write(package_name)
 
     # Install dependencies when a package is a VCS dependency.
     try:
@@ -1407,7 +1407,6 @@ def pip_install(
         if c.return_code == 0:
             break
     if tmp_fd and r:
-        os.close(tmp_fd)
         os.remove(r)
     # Return the result of the first one that runs ok, or the last one that didn't work.
     return c
