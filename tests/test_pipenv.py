@@ -45,7 +45,7 @@ class PipenvInstance():
         if self.chdir:
             os.chdir(self.original_dir)
 
-        shutil.rmtree(self.path)
+        shutil.rmtree(self.path, ignore_errors=True)
 
     def pipenv(self, cmd, block=True):
         if self.pipfile_path:

@@ -1319,15 +1319,15 @@ def pip_install(
     package_name=None, r=None, allow_global=False, ignore_hashes=False,
     no_deps=True, verbose=False, block=True, index=None, pre=False
 ):
-
+    tmp_fd = None  # Use to track an open tempfile descriptor
     if verbose:
         click.echo(crayons.normal('Installing {0!r}'.format(package_name), bold=True), err=True)
 
     # Create files for hash mode.
     if (not ignore_hashes) and (r is None):
-        r = tempfile.mkstemp(prefix='pipenv-', suffix='-requirement.txt')[1]
-        with open(r, 'w') as f:
-            f.write(package_name)
+        tmp_fd, r = tempfile.mkstemp(prefix='pipenv-', suffix='-requirement.txt')
+        tmp_fd.write(package_name)
+        tmp_fd.close()
 
     # Install dependencies when a package is a VCS dependency.
     try:
@@ -1406,7 +1406,9 @@ def pip_install(
         c = delegator.run(pip_command, block=block)
         if c.return_code == 0:
             break
-
+    if tmp_fd and r:
+        os.close(tmp_fd)
+        os.remove(r)
     # Return the result of the first one that runs ok, or the last one that didn't work.
     return c
 
