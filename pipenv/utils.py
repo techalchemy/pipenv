@@ -1192,6 +1192,9 @@ class PythonFinder(object):
 
     @classmethod
     def from_version(cls, version):
+        guess = cls.PYTHON_VERSIONS.get(cls.MAX_PYTHON.get(version, version))
+        if guess:
+            return guess
         if os.name == 'nt':
             path = cls.from_windows_finder(version)
         else:
@@ -1206,16 +1209,18 @@ class PythonFinder(object):
 
     @classmethod
     def from_windows_finder(cls, version):
-        from pipenv.vendor import pep514tools
-        version_object = pep514tools.environment.find(version)
-        path = Path(version_object.info.install_path.__getattr__('')).joinpath('python.exe')
-        version = version_object.info.sys_version
-        full_version = version_object.info.version
-        for v in [version, full_version]:
-            if not cls.PYTHON_VERSIONS.get(v):
-                cls.PYTHON_VERSIONS[v] = '{0}'.format(path)
-        cls.PYTHON_PATHS['{0}'.format(path)] = full_version
-        return '{0}'.format(path)
+        from pipenv.vendor.pep514tools import environment
+        versions = environment.find(version)
+        path = None
+        for version_object in versions:
+            path = Path(version_object.info.install_path.__getattr__('')).joinpath('python.exe')
+            version = version_object.info.sys_version
+            full_version = version_object.info.version
+            for v in [version, full_version]:
+                if not cls.PYTHON_VERSIONS.get(v):
+                    cls.PYTHON_VERSIONS[v] = '{0}'.format(path)
+            cls.register_python(path, full_version)
+        return cls.PYTHON_VERSIONS[version]
 
     @classmethod
     def _populate_python_versions(cls):
@@ -1262,7 +1267,10 @@ class PythonFinder(object):
         major_minor = '.'.join(['{0}'.format(v) for v in parsed_version._version.release[:2]])
         major = '{0}'.format(parsed_version._version.release[0])
         cls.PYTHON_PATHS[path] = full_version
-        if not (pre or parsed_version.is_prerelease) and parsed_version > parse_version(cls.MAX_PYTHON.get(major_minor, '0.0.0')):
+        if not pre and parsed_version > parse_version(cls.MAX_PYTHON.get(major_minor, '0.0.0')):
+            if major_minor != full_version:
+                if parsed_version > parse_version(cls.MAX_PYTHON.get(full_version, '0.0.0')):
+                    cls.MAX_PYTHON[full_version] = parsed_version.base_version
             cls.MAX_PYTHON[major_minor] = parsed_version.base_version
             cls.PYTHON_VERSIONS[major_minor] = path
             if parsed_version > parse_version(cls.MAX_PYTHON.get(major, '0.0.0')):
@@ -1305,18 +1313,13 @@ class PythonFinder(object):
 
     @classmethod
     def _populate_which_dict(cls):
-        exts = list(filter(None, os.environ.get('PATHEXT', '').split(os.pathsep)))
         for path in os.environ.get('PATH', '').split(os.pathsep):
             files = os.listdir(path)
             for fn in files:
-                exec_name = os.path.basename(fn)
-                if os.access(fn, os.X_OK):
-                    if not cls.WHICH.get(exec_name):
-                        cls.WHICH[exec_name] = fn
-                for e in exts:
-                    pext = fn + e
-                    if os.access(pext, os.X_OK):
-                        if not cls.WHICH.get(pext):
-                            cls.WHICH[pext] = fn
-                        if not cls.WHICH.get(exec_name):
-                            cls.WHICH[exec_name] = fn
+                full_path = os.sep.join([path, fn])
+                if os.access(full_path, os.X_OK) and not os.path.isdir(full_path):
+                    if not cls.WHICH.get(fn):
+                        cls.WHICH[fn] = full_path
+                    base_exec = os.path.splitext(fn)[0]
+                    if not cls.WHICH.get(base_exec):
+                        cls.WHICH[base_exec] = full_path
