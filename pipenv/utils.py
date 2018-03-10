@@ -53,7 +53,9 @@ from pip.index import Link
 from requests.exceptions import HTTPError, ConnectionError
 
 from .pep508checker import lookup
-from .environments import SESSION_IS_INTERACTIVE, PIPENV_MAX_ROUNDS, PIPENV_CACHE_DIR
+from.environments import(
+    SESSION_IS_INTERACTIVE, PIPENV_MAX_ROUNDS, PIPENV_CACHE_DIR, PYENV_INSTALLED, PYENV_ROOT
+)
 
 if six.PY2:
     class ResourceWarning(Warning):
@@ -1163,3 +1165,158 @@ class TemporaryDirectory(object):
     def cleanup(self):
         if self._finalizer.detach():
             rmtree(self.name)
+
+
+class PythonFinder(object):
+    """Find pythons given a specific version, path, or nothing."""
+
+    PYENV_VERSIONS = {}
+    PYTHON_VERSIONS = {}
+    PYTHON_PATHS = {}
+    MAX_PYTHON = {}
+    WHICH_PYTHON = {}
+    WHICH = {}
+    RUNTIMES = ['python', 'pypy', 'ipy', 'jython', 'pyston']
+
+    def __init__(self, path=None, version=None, full_version=None):
+        self.path = path
+        self.version = version
+        self.full_version = full_version
+
+    @classmethod
+    def from_line(cls, python):
+        if os.path.isabs(python) and os.access(python, os.X_OK):
+            return python
+        if python.startswith('py'):
+            return cls.WHICH_PYTHON.get(python) or cls.which(python)
+
+    @classmethod
+    def from_version(cls, version):
+        if os.name == 'nt':
+            path = cls.from_windows_finder(version)
+        else:
+            from pip._vendor.packaging.version import parse as parse_version
+            parsed_version = parse_version(version)
+            full_version = parsed_version.base_version
+            if PYENV_INSTALLED:
+                path = cls.from_pyenv(full_version)
+            else:
+                path = cls._crawl_path_for_version(full_version)
+        return path
+
+    @classmethod
+    def from_windows_finder(cls, version):
+        from pipenv.vendor import pep514tools
+        version_object = pep514tools.environment.find(version)
+        path = Path(version_object.info.install_path.__getattr__('')).joinpath('python.exe')
+        version = version_object.info.sys_version
+        full_version = version_object.info.version
+        for v in [version, full_version]:
+            if not cls.PYTHON_VERSIONS.get(v):
+                cls.PYTHON_VERSIONS[v] = '{0}'.format(path)
+        cls.PYTHON_PATHS['{0}'.format(path)] = full_version
+        return '{0}'.format(path)
+
+    @classmethod
+    def _populate_python_versions(cls):
+        import fnmatch
+        match_rules = ['*python', '*python?', '*python?.?', '*python?.?m']
+        runtime_execs = []
+        exts = list(filter(None, os.environ.get('PATHEXT', '').split(os.pathsep)))
+        for path in os.environ.get('PATH', '').split(os.pathsep):
+            from glob import glob
+            pythons = glob(os.sep.join([path, 'python*']))
+            execs = [match for rule in match_rules for match in fnmatch.filter(pythons, rule)]
+            for executable in execs:
+                exec_name = os.path.basename(executable)
+                if os.access(executable, os.X_OK):
+                    runtime_execs.append(executable)
+                if not cls.WHICH_PYTHON.get(exec_name):
+                    cls.WHICH_PYTHON[exec_name] = executable
+                for e in exts:
+                    pext = executable + e
+                    if os.access(pext, os.X_OK):
+                        runtime_execs.append(pext)
+        for python in runtime_execs:
+            version_cmd = '{0} -c "import sys; print(sys.version.split()[0])"'.format(shellquote(python))
+            version = delegator.run(version_cmd).out.strip()
+            cls.register_python(python, version)
+
+    @classmethod
+    def _crawl_path_for_version(cls, version):
+        if not cls.PYTHON_VERSIONS:
+            cls._populate_python_versions()
+        return cls.PYTHON_VERSIONS.get(version)
+
+    @classmethod
+    def from_pyenv(cls, version):
+        if not cls.PYENV_VERSIONS:
+            cls.populate_pyenv_runtimes()
+        return cls.PYENV_VERSIONS[version]
+
+    @classmethod
+    def register_python(cls, path, full_version, pre=False, pyenv=False):
+        from pip._vendor.packaging.version import parse as parse_version
+        parsed_version = parse_version(full_version)
+        pre = pre or parsed_version.is_prerelease
+        major_minor = '.'.join(['{0}'.format(v) for v in parsed_version._version.release[:2]])
+        major = '{0}'.format(parsed_version._version.release[0])
+        cls.PYTHON_PATHS[path] = full_version
+        if not (pre or parsed_version.is_prerelease) and parsed_version > parse_version(cls.MAX_PYTHON.get(major_minor, '0.0.0')):
+            cls.MAX_PYTHON[major_minor] = parsed_version.base_version
+            cls.PYTHON_VERSIONS[major_minor] = path
+            if parsed_version > parse_version(cls.MAX_PYTHON.get(major, '0.0.0')):
+                cls.MAX_PYTHON[major] = parsed_version.base_version
+                cls.PYTHON_VERSIONS[major] = path
+        if not pyenv:
+            for v in [full_version, major_minor, major]:
+                if not cls.PYTHON_VERSIONS.get(v) or cls.MAX_PYTHON[v] == full_version:
+                    cls.PYTHON_VERSIONS[v] = path
+        else:
+            for v in[full_version, major_minor, major]:
+                if (not cls.PYENV_VERSIONS.get(v) and (v == major and not pre) or v != major) or cls.MAX_PYTHON[v] == full_version:
+                    cls.PYENV_VERSIONS[v] = path
+            if not cls.PYTHON_VERSIONS.get(full_version):
+                cls.PYTHON_VERSIONS[full_version] = path
+
+    @classmethod
+    def populate_pyenv_runtimes(cls):
+        from glob import glob
+        from pip._vendor.packaging.version import parse as parse_version
+        search_path = os.sep.join(['{0}'.format(PYENV_ROOT), 'versions', '*'])
+        runtimes = ['pypy', 'ipy', 'jython', 'pyston']
+        for pyenv_path in glob(search_path):
+            parsed_version = parse_version(os.path.basename(pyenv_path))
+            if parsed_version.is_prerelease and cls.PYENV_VERSIONS.get(parsed_version.base_version):
+                continue
+            bin_path = os.sep.join([pyenv_path, 'bin'])
+            runtime = os.sep.join([bin_path, 'python'])
+            if not os.path.exists(runtime):
+                exes = [os.sep.join([bin_path, exe]) for exe in runtimes if os.path.exists(os.sep.join([bin_path, exe]))]
+                if exes:
+                    runtime = exes[0]
+            cls.register_python(runtime, parsed_version.base_version, pre=parsed_version.is_prerelease, pyenv=True)
+
+    @classmethod
+    def which(cls, cmd):
+        if not cls.WHICH:
+            cls._populate_which_dict()
+        return cls.WHICH.get(cmd, cmd)
+
+    @classmethod
+    def _populate_which_dict(cls):
+        exts = list(filter(None, os.environ.get('PATHEXT', '').split(os.pathsep)))
+        for path in os.environ.get('PATH', '').split(os.pathsep):
+            files = os.listdir(path)
+            for fn in files:
+                exec_name = os.path.basename(fn)
+                if os.access(fn, os.X_OK):
+                    if not cls.WHICH.get(exec_name):
+                        cls.WHICH[exec_name] = fn
+                for e in exts:
+                    pext = fn + e
+                    if os.access(pext, os.X_OK):
+                        if not cls.WHICH.get(pext):
+                            cls.WHICH[pext] = fn
+                        if not cls.WHICH.get(exec_name):
+                            cls.WHICH[exec_name] = fn
