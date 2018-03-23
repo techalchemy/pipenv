@@ -13,7 +13,7 @@ class TestRequirements:
         'line, pipfile',
         [
             ['requests', {'requests': '*'}],
-            ['requests[socks]', {'requests': {'extras': 'socks'}}],
+            ['requests[socks]', {'requests': {'extras': ['socks'], 'version': '*'}}],
             ['django>1.10', {'django': '>1.10'}],
             ['requests[socks]>1.10', {'requests': {'extras': ['socks'], 'version': '>1.10'}}],
             ['-e git+git://github.com/pinax/pinax.git@1.4#egg=pinax', {'pinax': {'git': 'git://github.com/pinax/pinax.git', 'ref': '1.4', 'editable': True}}],
@@ -28,7 +28,6 @@ class TestRequirements:
     def test_pip_requirements(self, line, pipfile):
         from_line = requirements.PipenvRequirement.from_line(line)
         from_line_req = from_line.requirement
-        del from_line_req.link
         assert from_line.requirement.__dict__ == get_requirement(line.split(' --hash')[0]).__dict__
         pipfile_pkgname = first([k for k in pipfile.keys()])
         pipfile_entry = pipfile[pipfile_pkgname]

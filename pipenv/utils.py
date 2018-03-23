@@ -460,13 +460,13 @@ def convert_deps_to_pip(deps, project=None, r=True, include_index=False):
     from .requirements import PipenvRequirement
     dependencies = []
     for dep_name, dep in deps.items():
-        indexes = project.sources
-        if dep.get('index'):
+        indexes = project.sources if hasattr(project, 'sources') else None
+        if hasattr(dep, 'keys') and dep.get('index'):
             indexes = project.get_source(dep['index'])
         new_dep = PipenvRequirement.from_pipfile(dep_name, indexes, dep)
-        r = new_dep.as_requirement(project=project, include_index=include_index)
-        r = r.strip()
-        dependencies.append(r)
+        req = new_dep.as_requirement(project=project, include_index=include_index)
+        req = req.strip()
+        dependencies.append(req)
     if not r:
         return dependencies
 
@@ -802,6 +802,10 @@ def find_windows_executable(bin_path, exe_name):
         return exec_files[0]
 
     return find_executable(exe_name)
+
+
+def path_to_url(path):
+    return Path(normalize_drive(os.path.abspath(path))).as_uri()
 
 
 def get_converted_relative_path(path, relative_to=os.curdir):

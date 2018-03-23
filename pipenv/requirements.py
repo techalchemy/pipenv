@@ -6,12 +6,14 @@ from pipenv import PIPENV_VENDOR, PIPENV_PATCHED
 sys.path.insert(0, PIPENV_VENDOR)
 sys.path.insert(0, PIPENV_PATCHED)
 import hashlib
+import os
 import requirements
 import six
 from collections import defaultdict
 from pip9.index import Link
+from pip9.download import path_to_url, url_to_path
 from pip9.req.req_install import _strip_extras
-from pipenv.utils import SCHEME_LIST, VCS_LIST, is_installable_file, is_vcs, multi_split, Path, get_converted_relative_path, is_star, is_pinned
+from pipenv.utils import SCHEME_LIST, VCS_LIST, is_installable_file, is_vcs, multi_split, Path, get_converted_relative_path, is_star, is_pinned, is_valid_url
 from first import first
 
 HASH_STRING = ' --hash={0}'
@@ -61,8 +63,8 @@ class PipenvRequirement(object):
         self.name = getattr(requirement, 'name', name)
         self.path = path or getattr(requirement, 'path', None)
         self.uri = uri or getattr(requirement, 'uri', None)
-        self.extras = extras or getattr(requirement, 'extras', None)
-        self.markers = markers or getattr(requirement, 'markers', None)
+        self.extras = getattr(requirement, 'extras', extras)
+        self.markers = getattr(requirement, 'markers', markers)
         self.editable = editable or getattr(requirement, 'editable', None)
         self.vcs = vcs or getattr(requirement, 'vcs', None)
         self.link = link or getattr(requirement, 'link', None)
@@ -110,8 +112,8 @@ class PipenvRequirement(object):
                 _editable
             ):
                 line = '{0}{1}'.format(_editable, self.line)
-            line = '{0}{1}{2}'.format(
-                line, self.markers_as_pip, self.hashes_as_pip
+            line = '{0}{1}{2}{3}'.format(
+                line, self.extras_as_pip, self.markers_as_pip, self.hashes_as_pip
             )
         return line
 
@@ -162,31 +164,30 @@ class PipenvRequirement(object):
             hashes = pipfile_entry.get('hashes', pipfile_entry.get('hash'))
         editable = True if pipfile_entry.get('editable') else False
         vcs = first([vcs for vcs in VCS_LIST if vcs in pipfile_entry])
-        uri = pipfile_entry.get('uri')
-        extras = pipfile_entry.get('extras')
+        uri = pipfile_entry.get('uri') if 'uri' in pipfile_entry else None
+        extras = pipfile_entry.get('extras') if 'extras' in pipfile_entry else None
         link = None
+        path = None
         if vcs:
             vcs_uri = pipfile_entry.get(vcs)
-            vcs_ref = pipfile_entry.get('ref')
-            vcs_subdirectory = pipfile_entry.get('subdirectory')
-            vcs_line = build_vcs_link(
+            if not is_valid_url(vcs_uri):
+                path = vcs_uri
+                vcs_uri = path_to_url(os.path.abspath(vcs_uri))
+            link = build_vcs_link(
                 vcs,
                 vcs_uri,
                 name=name,
-                extras=extras,
-                ref=vcs_ref,
-                subdirectory=vcs_subdirectory,
-                editable=False,
+                ref=pipfile_entry.get('ref'),
+                subdirectory=pipfile_entry.get('subdirectory'),
             )
-            _editable = cls._editable_prefix if editable else ''
-            line = '{0}{1}'.format(_editable, vcs_line)
-            link = Link(vcs_line)
-            uri = _clean_git_uri(vcs_line)
+            if not path:
+                uri = _strip_ssh_from_git_uri(link.url)
         if pipfile_entry.get('version'):
-            name = '{0}{1}'.format(name, pipfile_entry.get('version'))
+            if not is_star(pipfile_entry['version']):
+                name = '{0}{1}'.format(name, pipfile_entry.get('version'))
         return PipenvRequirement(
             name=name,
-            path=pipfile_entry.get('path'),
+            path=path,
             uri=uri,
             markers=pipfile_entry.get('markers'),
             extras=extras,
@@ -326,7 +327,7 @@ class PipenvRequirement(object):
         :param include_index: bool, optional
         """
         line = self.constructed_line
-        if include_index and not (self.local_file or self.vcs):
+        if include_index and not (self.requirement.local_file or self.vcs):
             from .utils import prepare_pip_source_args
 
             if self.index:
@@ -474,12 +475,12 @@ def _extras_to_string(extras):
 
 
 def build_vcs_link(
-    vcs, uri, name=None, ref=None, subdirectory=None, editable=None, extras=[]
+    vcs, uri, name=None, ref=None, subdirectory=None, extras=[]
 ):
-    _editable = PipenvRequirement._editable_prefix if editable else ''
-    anchor = '{0}{1}+'.format(_editable, vcs)
-    if not uri.startswith(anchor):
-        uri = '{0}{1}'.format(anchor, uri)
+    vcs_start = '{0}+'.format(vcs)
+    if not uri.startswith(vcs_start):
+        uri = '{0}{1}'.format(vcs_start, uri)
+    uri = _clean_git_uri(uri)
     if ref:
         uri = '{0}@{1}'.format(uri, ref)
     if name:
@@ -489,23 +490,4 @@ def build_vcs_link(
             uri = '{0}{1}'.format(uri, extras)
     if subdirectory:
         uri = '{0}&subdirectory={1}'.format(uri, subdirectory)
-    return uri
-
-
-if __name__ == "__main__":
-    # line = '-e git+git@github.com:pypa/pipenv.git@master#egg=pipenv'
-    # line = 'requests'
-    pf = {
-        'requests': {
-            'extras': ['security'],
-            'git': 'https://github.com/requests/requests.git',
-            'ref': 'master',
-        }
-    }
-    from pipenv.core import project
-
-    r = PipenvRequirement.from_pipfile(
-        'requests', project.sources, pf['requests']
-    )
-    print(r.as_requirement())
-    print(r.requirement.__dict__)
+    return Link(uri)
