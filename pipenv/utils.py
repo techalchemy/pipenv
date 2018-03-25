@@ -539,7 +539,7 @@ def is_editable(pipfile_entry):
 
 
 def is_vcs(pipfile_entry):
-    import requirements
+    from pipenv.vendor import requirements
 
     """Determine if dictionary entry from Pipfile is for a vcs dependency."""
     if hasattr(pipfile_entry, 'keys'):
