@@ -102,10 +102,13 @@ class PipfileRequirement(object):
 
     @property
     def requirement(self):
+        req_uri = self.uri
+        if self.editable and self.path and not self.uri:
+            req_uri = path_to_url(os.path.abspath(self.path))
         return PipenvRequirement._create_requirement(
             name=self.pip_version,
             path=self.path,
-            uri=self.uri,
+            uri=req_uri,
             markers=self.markers,
             extras=self.extras,
             index=self.index,
