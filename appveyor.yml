@@ -53,10 +53,10 @@ cache:
   - "%LocalAppData%\\pip\\cache"
 
 build_script:
-  - cmd: pipenv run pytest -n 8 -v -m cli
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -n auto -v -m cli
 
 test_script:
-  - cmd: pipenv run pytest -v -n auto -m %TEST_SUITE%
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
 
 after_test:
-  - cmd: pipenv run pytest -v -n auto -m install
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m install
