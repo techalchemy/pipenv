@@ -9,6 +9,7 @@ import hashlib
 import os
 import requirements
 import six
+from attr import attrs, attrib, Factory, validators
 from collections import defaultdict
 from pip9.index import Link
 from pip9.download import path_to_url, url_to_path
@@ -19,6 +20,104 @@ from first import first
 HASH_STRING = ' --hash={0}'
 
 
+def _validate_vcs(instance, attr, value):
+    if value not in VCS_LIST:
+        raise ValueError('Invalid vcs {0}'.format(value))
+
+
+@attrs
+class PipfileRequirement(object):
+    path = attrib(default=None)
+    uri = attrib(default=None)
+    name = attrib(default=None)
+    extras = attrib(default=Factory(list))
+    markers = attrib(default='')
+    editable = attrib(default=False)
+    vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
+    version = attrib(default='')
+    index = attrib(default=None)
+    _hash = attrib(default=None)
+    hashes = attrib(default=Factory(list))
+    ref = attrib(default=None)
+    subdirectory = attrib(default=None)
+    _link = attrib()
+
+    @_link.default
+    def _init_link(self):
+        if not self.vcs:
+            return None
+
+        uri = self.uri if self.uri else path_to_url(self.path)
+        return build_vcs_link(
+            self.vcs,
+            uri,
+            name=self.name,
+            ref=self.ref,
+            subdirectory=self.subdirectory,
+        )
+
+    def __attrs_post_init__(self):
+        if self._hash and not self.hashes:
+            self.hashes = [self._hash]
+        if self.vcs and self.uri and self._link:
+            self.uri = _strip_ssh_from_git_uri(self._link.url)
+
+    @classmethod
+    def create(cls, name, pipfile):
+        _pipfile = {}
+        if hasattr(pipfile, 'copy'):
+            _pipfile = pipfile.copy()
+        _pipfile['name'] = name
+        _pipfile['version'] = cls._get_version(pipfile)
+        editable = _pipfile.pop(
+            'editable'
+        ) if 'editable' in _pipfile else False
+        vcs_type = first([vcs for vcs in VCS_LIST if vcs in _pipfile])
+        vcs = _pipfile.pop(vcs_type) if vcs_type else None
+        _pipfile_vcs_key = None
+        if vcs:
+            _pipfile_vcs_key = 'uri' if is_valid_url(vcs) else 'path'
+        _pipfile['editable'] = editable
+        _pipfile['vcs'] = vcs_type
+        if _pipfile_vcs_key and not _pipfile.get(_pipfile_vcs_key):
+            _pipfile[_pipfile_vcs_key] = vcs
+        return cls(**_pipfile)
+
+    @staticmethod
+    def _get_version(pipfile_entry):
+        if str(pipfile_entry) == '{}' or is_star(pipfile_entry):
+            return ''
+
+        elif isinstance(pipfile_entry, six.string_types):
+            return pipfile_entry
+
+        return pipfile_entry.get('version', '')
+
+    @property
+    def pip_version(self):
+        if is_star(self.version):
+            return self.name
+
+        return '{0}{1}'.format(self.name, self.version)
+
+    @property
+    def requirement(self):
+        return PipenvRequirement._create_requirement(
+            name=self.pip_version,
+            path=self.path,
+            uri=self.uri,
+            markers=self.markers,
+            extras=self.extras,
+            index=self.index,
+            hashes=self.hashes,
+            vcs=self.vcs,
+            editable=self.editable,
+            link=self._link,
+            line=None,
+        )
+
+
+@attrs
 class PipenvRequirement(object):
     """Requirement for Pipenv Use
 
@@ -31,46 +130,38 @@ class PipenvRequirement(object):
         - resolve
     """
     _editable_prefix = '-e '
+    path = attrib(default=None)
+    uri = attrib(default=None)
+    name = attrib(default=None)
+    extras = attrib(default=Factory(list))
+    markers = attrib(default='')
+    editable = attrib(default=False)
+    vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
+    link = attrib(default=None)
+    line = attrib(default=None)
+    requirement = attrib(default=None)
+    index = attrib(default=Factory(list))
+    specs = attrib(default='')
+    hashes = attrib(default=Factory(list))
 
-    def __init__(
-        self,
-        name=None,
-        path=None,
-        uri=None,
-        extras=None,
-        markers=None,
-        editable=False,
-        vcs=None,
-        link=None,
-        requirement=None,
-        line=None,
-        index=None,
-        hashes=[],
-    ):
-        if not requirement:
-            requirement = self._create_requirement(
-                name=name,
-                path=path,
-                uri=uri,
-                extras=extras,
-                markers=markers,
-                editable=editable,
-                vcs=vcs,
-                link=link,
-                line=line,
-            )
-        self.requirement = requirement
-        self.name = getattr(requirement, 'name', name)
-        self.path = path or getattr(requirement, 'path', None)
-        self.uri = uri or getattr(requirement, 'uri', None)
-        self.extras = getattr(requirement, 'extras', extras)
-        self.markers = getattr(requirement, 'markers', markers)
-        self.editable = editable or getattr(requirement, 'editable', None)
-        self.vcs = vcs or getattr(requirement, 'vcs', None)
-        self.link = link or getattr(requirement, 'link', None)
-        self.line = line or getattr(requirement, 'line', None)
-        self.index = index
-        self.hashes = hashes
+    @classmethod
+    def create(cls, req):
+        creation_attrs = {'requirement': req}
+        for prop in [
+            'name',
+            'extras',
+            'markers',
+            'line',
+            'link',
+            'vcs',
+            'editable',
+            'uri',
+            'path',
+            'hashes',
+            'index',
+        ]:
+            creation_attrs[prop] = getattr(req, prop, None)
+        return cls(**creation_attrs)
 
     @property
     def original_line(self):
@@ -113,7 +204,10 @@ class PipenvRequirement(object):
             ):
                 line = '{0}{1}'.format(_editable, self.line)
             line = '{0}{1}{2}{3}'.format(
-                line, self.extras_as_pip, self.markers_as_pip, self.hashes_as_pip
+                line,
+                self.extras_as_pip,
+                self.markers_as_pip,
+                self.hashes_as_pip,
             )
         return line
 
@@ -133,7 +227,7 @@ class PipenvRequirement(object):
 
     @property
     def specifiers_as_pip(self):
-        if self.requirement.specs:
+        if hasattr(self.requirement, 'specs'):
             return ','.join([''.join(spec) for spec in self.requirement.specs])
 
         return ''
@@ -150,54 +244,8 @@ class PipenvRequirement(object):
 
     @classmethod
     def from_pipfile(cls, name, indexes, pipfile_entry):
-        if is_star(pipfile_entry) or isinstance(
-            pipfile_entry, six.string_types
-        ):
-            version = '' if (
-                str(pipfile_entry) == '{}' or is_star(pipfile_entry)
-            ) else pipfile_entry
-            return PipenvRequirement(name='{0}{1}'.format(name, version))
-
-        hashes = None
-        line = None
-        if 'hashes' in pipfile_entry or 'hash' in pipfile_entry:
-            hashes = pipfile_entry.get('hashes', pipfile_entry.get('hash'))
-        editable = True if pipfile_entry.get('editable') else False
-        vcs = first([vcs for vcs in VCS_LIST if vcs in pipfile_entry])
-        uri = pipfile_entry.get('uri') if 'uri' in pipfile_entry else None
-        extras = pipfile_entry.get('extras') if 'extras' in pipfile_entry else None
-        link = None
-        path = None
-        if vcs:
-            vcs_uri = pipfile_entry.get(vcs)
-            if not is_valid_url(vcs_uri):
-                path = vcs_uri
-                vcs_uri = path_to_url(os.path.abspath(vcs_uri))
-            link = build_vcs_link(
-                vcs,
-                vcs_uri,
-                name=name,
-                ref=pipfile_entry.get('ref'),
-                subdirectory=pipfile_entry.get('subdirectory'),
-            )
-            if not path:
-                uri = _strip_ssh_from_git_uri(link.url)
-        if pipfile_entry.get('version'):
-            if not is_star(pipfile_entry['version']):
-                name = '{0}{1}'.format(name, pipfile_entry.get('version'))
-        return PipenvRequirement(
-            name=name,
-            path=path,
-            uri=uri,
-            markers=pipfile_entry.get('markers'),
-            extras=extras,
-            index=pipfile_entry.get('index'),
-            hashes=hashes,
-            vcs=vcs,
-            editable=editable,
-            link=link,
-            line=line,
-        )
+        pipfile = PipfileRequirement.create(name, pipfile_entry)
+        return cls.create(pipfile.requirement)
 
     @classmethod
     def from_line(cls, line):
@@ -243,17 +291,19 @@ class PipenvRequirement(object):
                 'original_line': line,
                 'name': multi_split(line, '!=<>~')[0],
             }
-        return PipenvRequirement(
-            line=req_dict['original_line'],
-            name=req_dict.get('name'),
-            path=req_dict.get('path'),
-            uri=req_dict.get('uri'),
-            link=req_dict.get('link'),
-            hashes=hashes,
-            markers=markers,
-            extras=extras,
-            editable=editable,
-            vcs=vcs,
+        return cls.create(
+            cls._create_requirement(
+                line=req_dict['original_line'],
+                name=req_dict.get('name'),
+                path=req_dict.get('path'),
+                uri=req_dict.get('uri'),
+                link=req_dict.get('link'),
+                hashes=hashes,
+                markers=markers,
+                extras=extras,
+                editable=editable,
+                vcs=vcs,
+            )
         )
 
     def as_pipfile(self):
@@ -397,6 +447,8 @@ class PipenvRequirement(object):
         editable=False,
         vcs=None,
         link=None,
+        hashes=None,
+        index=None,
     ):
         _editable = cls._editable_prefix if editable else ''
         _line = line or uri or path or name
@@ -433,6 +485,10 @@ class PipenvRequirement(object):
                 )
             ).extras
         req.link = link
+        if hashes:
+            req.hashes = hashes
+        if index:
+            req.index = index
         return req
 
 
@@ -475,7 +531,7 @@ def _extras_to_string(extras):
 
 
 def build_vcs_link(
-    vcs, uri, name=None, ref=None, subdirectory=None, extras=[]
+    vcs, uri, name=None, ref=None, subdirectory=None, extras= []
 ):
     vcs_start = '{0}+'.format(vcs)
     if not uri.startswith(vcs_start):
