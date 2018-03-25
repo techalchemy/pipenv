@@ -28,7 +28,11 @@ class TestRequirements:
     def test_pip_requirements(self, line, pipfile):
         from_line = requirements.PipenvRequirement.from_line(line)
         from_line_req = from_line.requirement
-        assert from_line.requirement.__dict__ == get_requirement(line.split(' --hash')[0]).__dict__
+        if hasattr(from_line_req, 'link'):
+            del from_line_req.link
+        if hasattr(from_line_req, 'hashes'):
+            del from_line_req.hashes
+        assert from_line_req.__dict__ == get_requirement(line.split(' --hash')[0]).__dict__
         pipfile_pkgname = first([k for k in pipfile.keys()])
         pipfile_entry = pipfile[pipfile_pkgname]
         from_pipfile = requirements.PipenvRequirement.from_pipfile(pipfile_pkgname, [], pipfile_entry)
