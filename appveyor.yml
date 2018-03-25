@@ -1,0 +1,62 @@
+build: off
+version: 1.0.{build}
+
+skip_branch_with_pr: true
+
+init:
+
+  - git config --global core.sharedRepository true  
+  - git config --global core.longpaths true
+  - git config --global core.autocrlf input
+
+environment:
+
+  PYPI_VENDOR_DIR: ".\\tests\\pypi\\"
+  GIT_ASK_YESNO: "false"
+  SHELL: "windows"
+  PYTHON_ARCH: "64"
+  PYTHONIOENCODING: "utf-8"
+
+  matrix:
+
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "dotvenv or check or unused or requirements"
+
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "complex"
+    
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "markers or run or project or utils"
+
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "3.6.x"
+      TEST_SUITE: "dotvenv or check or unused or requirements"
+
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "3.6.x"
+      TEST_SUITE: "complex"
+
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "3.6.x"
+      TEST_SUITE: "markers or run or project or utils"
+
+install:
+  - set PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%
+  - python -m pip install --upgrade pip
+  - python -m pip install --upgrade --upgrade-strategy=only-if-needed .
+  - pipenv install --dev
+
+cache: 
+  - "%LocalAppData%\\pip\\cache"
+
+build_script:
+  - cmd: pipenv run pytest -n 8 -v -m cli
+
+test_script:
+  - cmd: pipenv run pytest -v -n auto -m %TEST_SUITE%
+
+after_test:
+  - cmd: pipenv run pytest -v -n auto -m install
