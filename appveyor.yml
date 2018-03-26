@@ -5,7 +5,7 @@ skip_branch_with_pr: true
 
 init:
 
-  - git config --global core.sharedRepository true  
+  - git config --global core.sharedRepository true
   - git config --global core.longpaths true
   - git config --global core.autocrlf input
 
@@ -21,42 +21,42 @@ environment:
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
-      TEST_SUITE: "dotvenv or check or unused or requirements"
+      # TEST_SUITE: "dotvenv or check or unused or requirements"
 
-    - PYTHON: "C:\\Python27-x64"
-      PYTHON_VERSION: "2.7.x"
-      TEST_SUITE: "complex"
-    
-    - PYTHON: "C:\\Python27-x64"
-      PYTHON_VERSION: "2.7.x"
-      TEST_SUITE: "markers or run or project or utils"
+    # - PYTHON: "C:\\Python27-x64"
+    #   PYTHON_VERSION: "2.7.x"
+    #   TEST_SUITE: "complex"
 
-    - PYTHON: "C:\\Python36-x64"
-      PYTHON_VERSION: "3.6.x"
-      TEST_SUITE: "dotvenv or check or unused or requirements"
+    # - PYTHON: "C:\\Python27-x64"
+    #   PYTHON_VERSION: "2.7.x"
+    #   TEST_SUITE: "markers or run or project or utils"
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "3.6.x"
-      TEST_SUITE: "complex"
+      # TEST_SUITE: "dotvenv or check or unused or requirements"
 
-    - PYTHON: "C:\\Python36-x64"
-      PYTHON_VERSION: "3.6.x"
-      TEST_SUITE: "markers or run or project or utils"
+    # - PYTHON: "C:\\Python36-x64"
+    #   PYTHON_VERSION: "3.6.x"
+    #   TEST_SUITE: "complex"
+
+    # - PYTHON: "C:\\Python36-x64"
+    #   PYTHON_VERSION: "3.6.x"
+    #   TEST_SUITE: "markers or run or project or utils"
 
 install:
   - set PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%
-  - python -m pip install --upgrade pip
+  - python -m pip install --upgrade pip detox
   - python -m pip install --upgrade --upgrade-strategy=only-if-needed .
-  - pipenv install --dev
 
-cache: 
+cache:
   - "%LocalAppData%\\pip\\cache"
 
-build_script:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -n auto -v -m cli
+# build_script:
+#   - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -n auto -v -m cli
 
 test_script:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && python -m tox
+  # - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
 
-after_test:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m install
+# after_test:
+#   - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m install
