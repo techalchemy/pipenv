@@ -278,6 +278,7 @@ class PipenvRequirement(object):
             hashes = line.split(' --hash=')
             line, hashes = hashes[0], hashes[1:]
         editable = False
+        original_line = line
         _editable = ''
         if line.startswith('-e '):
             editable = True
@@ -289,6 +290,9 @@ class PipenvRequirement(object):
         vcs = None
         if is_installable_file(line):
             req_dict = cls._prep_path(line)
+            req_dict['original_line'] = '{0}{1}'.format(
+                _editable, req_dict['original_line']
+            )
         elif is_vcs(line):
             req_dict = cls._prep_vcs(line)
             vcs = first(
@@ -302,7 +306,7 @@ class PipenvRequirement(object):
         else:
             req_dict = {
                 'line': line,
-                'original_line': line,
+                'original_line': original_line,
                 'name': multi_split(line, '!=<>~')[0],
             }
         return cls.create(
