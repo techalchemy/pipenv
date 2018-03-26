@@ -24,6 +24,17 @@ def _validate_vcs(instance, attr, value):
     if value not in VCS_LIST:
         raise ValueError('Invalid vcs {0}'.format(value))
 
+_optional_instance_of = lambda cls: validators.optional(validators.instance_of(cls))
+
+
+@attrs
+class VCSRequirement(object):
+    #: vcs reference name (branch / commit / tag)
+    ref = attrib(default=None)
+    #: path to hit - without any of the VCS prefixes (like git+ / http+ / etc)
+    uri = attrib(default=None)
+    subdirectory = attrib(default=None)
+    vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
 
 @attrs
 class PipfileRequirement(object):
@@ -47,7 +58,7 @@ class PipfileRequirement(object):
         if not self.vcs:
             return None
 
-        uri = self.uri if self.uri else path_to_url(self.path)
+        uri = self.uri if self.uri else path_to_url(os.path.abspath(self.path))
         return build_vcs_link(
             self.vcs,
             uri,
@@ -65,8 +76,8 @@ class PipfileRequirement(object):
     @classmethod
     def create(cls, name, pipfile):
         _pipfile = {}
-        if hasattr(pipfile, 'copy'):
-            _pipfile = pipfile.copy()
+        if hasattr(pipfile, 'keys'):
+            _pipfile = dict(pipfile).copy()
         _pipfile['name'] = name
         _pipfile['version'] = cls._get_version(pipfile)
         editable = _pipfile.pop(
