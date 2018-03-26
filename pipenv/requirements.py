@@ -14,8 +14,13 @@ from collections import defaultdict
 from pip9.index import Link
 from pip9.download import path_to_url, url_to_path
 from pip9.req.req_install import _strip_extras
-from pipenv.utils import SCHEME_LIST, VCS_LIST, is_installable_file, is_vcs, multi_split, Path, get_converted_relative_path, is_star, is_pinned, is_valid_url
+from pipenv.utils import SCHEME_LIST, VCS_LIST, is_installable_file, is_vcs, multi_split, get_converted_relative_path, is_star, is_pinned, is_valid_url
 from first import first
+
+try:
+    from pathlib import Path
+except ImportError:
+    from pathlib2 import Path
 
 HASH_STRING = ' --hash={0}'
 
@@ -35,6 +40,7 @@ class VCSRequirement(object):
     uri = attrib(default=None)
     subdirectory = attrib(default=None)
     vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
+
 
 @attrs
 class PipfileRequirement(object):
