@@ -16,47 +16,58 @@ environment:
   SHELL: "windows"
   PYTHON_ARCH: "64"
   PYTHONIOENCODING: "utf-8"
+  PIPENV_VENV_IN_PROJECT: "1"
 
   matrix:
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
-      # TEST_SUITE: "dotvenv or check or unused or requirements"
+      TEST_SUITE: "cli"
 
-    # - PYTHON: "C:\\Python27-x64"
-    #   PYTHON_VERSION: "2.7.x"
-    #   TEST_SUITE: "complex"
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "dotvenv or check or unused or requirements"
 
-    # - PYTHON: "C:\\Python27-x64"
-    #   PYTHON_VERSION: "2.7.x"
-    #   TEST_SUITE: "markers or run or project or utils"
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "complex"
+
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "markers or run or project or utils"
+
+    - PYTHON: "C:\\Python27-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "install"
+
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "cli"
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "3.6.x"
-      # TEST_SUITE: "dotvenv or check or unused or requirements"
+      TEST_SUITE: "dotvenv or check or unused or requirements"
 
-    # - PYTHON: "C:\\Python36-x64"
-    #   PYTHON_VERSION: "3.6.x"
-    #   TEST_SUITE: "complex"
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "3.6.x"
+      TEST_SUITE: "complex"
 
-    # - PYTHON: "C:\\Python36-x64"
-    #   PYTHON_VERSION: "3.6.x"
-    #   TEST_SUITE: "markers or run or project or utils"
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "3.6.x"
+      TEST_SUITE: "markers or run or project or utils"
+
+    - PYTHON: "C:\\Python36-x64"
+      PYTHON_VERSION: "2.7.x"
+      TEST_SUITE: "install"
 
 install:
   - set PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%
-  - python -m pip install --upgrade pip detox
-  - python -m pip install --upgrade --upgrade-strategy=only-if-needed .
+  - python -m pip install --upgrade pip
+  - python -m pip install -e .
+  - pipenv install --dev
 
 cache:
   - "%LocalAppData%\\pip\\cache"
 
-# build_script:
-#   - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -n auto -v -m cli
-
 test_script:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && python -m tox
-  # - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
-
-# after_test:
-#   - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m install
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
