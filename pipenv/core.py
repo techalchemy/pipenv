@@ -2199,18 +2199,16 @@ def inline_activate_virtualenv():
 def do_run_nt(command, args):
     """Run command by appending space-joined args to it!"""
     import subprocess
-    if sys.version_info >= (3, 3):
-        import shlex.quote as shellquote
-    else:
-        import pipes.quote as shellquote
+    try:
+        from shlex import quote as shellquote
+    except ImportError:
+        from pipenv.vendor.backports.shlex import quote as shellquote
     command = project.scripts.get(command, command)
-    command = ' '.join([shellquote(c) for c in shlex.split(command, posix=False)])
+    command = [command] + [shellquote(a) for a in args]
 
     # if you've passed something with crazy quoting...
     # ...just don't. (or put it in a script!)
-    p = subprocess.Popen(
-        ' '.join([command] + list(args)), shell=True, universal_newlines=True
-    )
+    p = subprocess.Popen(command, shell=True, universal_newlines=True)
     p.communicate()
     sys.exit(p.returncode)
 
