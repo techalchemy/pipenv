@@ -63,6 +63,8 @@ environment:
 install:
   - set PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%
   - python -m pip install --upgrade pip
+  - virtualenv .venv
+  - .venv\\Scripts\\activate.bat
   - python -m pip install -e .
   - pipenv install --dev
 
