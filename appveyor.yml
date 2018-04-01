@@ -16,7 +16,6 @@ environment:
   SHELL: "windows"
   PYTHON_ARCH: "64"
   PYTHONIOENCODING: "utf-8"
-  PIPENV_VENV_IN_PROJECT: "1"
 
   matrix:
 
@@ -41,7 +40,7 @@ environment:
       TEST_SUITE: "install"
 
     - PYTHON: "C:\\Python36-x64"
-      PYTHON_VERSION: "2.7.x"
+      PYTHON_VERSION: "3.6.x"
       TEST_SUITE: "cli"
 
     - PYTHON: "C:\\Python36-x64"
@@ -62,14 +61,17 @@ environment:
 
 install:
   - set PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%
-  - python -m pip install --upgrade pip
-  - virtualenv .venv
-  - .venv\\Scripts\\activate.bat
-  - python -m pip install -e .
-  - pipenv install --dev
+  - "%PYTHON%\\python.exe -m pip install --upgrade pip"
+  - "%PYTHON%\\python.exe -m pip install -e ."
+  - "%PYTHON%\\python.exe -m pipenv install -e ."
+  - "%PYTHON%\\python.exe -m pipenv install --dev"
+  - echo "Running pipenv at:"
+  - "%PYTHON%\\python.exe -m pipenv --venv"
+  - echo "Using python:"
+  - "%PYTHON%\\python.exe -m pipenv --py"
 
 cache:
   - "%LocalAppData%\\pip\\cache"
 
 test_script:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE% tests
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && %PYTHON%\\python.exe -m pipenv run pytest -v -n auto -m %TEST_SUITE% tests

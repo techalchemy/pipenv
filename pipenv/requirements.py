@@ -14,6 +14,7 @@ from collections import defaultdict
 from pip9.index import Link
 from pip9.download import path_to_url, url_to_path
 from pip9.req.req_install import _strip_extras
+from pip9._vendor.distlib.markers import Evaluator
 from pipenv.utils import SCHEME_LIST, VCS_LIST, is_installable_file, is_vcs, multi_split, get_converted_relative_path, is_star, is_pinned, is_valid_url
 from first import first
 
@@ -30,6 +31,32 @@ def _validate_vcs(instance, attr, value):
         raise ValueError('Invalid vcs {0}'.format(value))
 
 _optional_instance_of = lambda cls: validators.optional(validators.instance_of(cls))
+
+
+@attrs
+class Source(object):
+    #: URL to PyPI instance
+    url = attrib(default='')
+    #: If False, skip SSL checks
+    verify_ssl = attrib(default=True, validator=validators.optional(validators.instance_of(bool)))
+    #: human name to refer to this source (can be referenced in packages or dev-packages)
+    name = attrib(default='')
+
+
+@attrs
+class Requires(object):
+    """System-level requirements - see PEP508 for more detail"""
+    os_name = attrib(default=None)
+    sys_platform = attrib(default=None)
+    platform_machine = attrib(default=None)
+    platform_python_implementation = attrib(default=None)
+    platform_release = attrib(default=None)
+    platform_system = attrib(default=None)
+    platform_version = attrib(default=None)
+    python_version = attrib(default=None)
+    python_full_version = attrib(default=None)
+    implementation_name = attrib(default=None)
+    implementation_version = attrib(default=None)
 
 
 @attrs
@@ -98,6 +125,13 @@ class PipfileRequirement(object):
         _pipfile['vcs'] = vcs_type
         if _pipfile_vcs_key and not _pipfile.get(_pipfile_vcs_key):
             _pipfile[_pipfile_vcs_key] = vcs
+        markers = _pipfile.get('markers')
+        _extra_markers = [k for k in _pipfile.keys() if k in Evaluator.allowed_values.keys()]
+        if _extra_markers:
+            markers = list(markers) if markers else []
+            for marker in _extra_markers:
+                markers.append(_pipfile.pop(marker))
+            _pipfile['markers'] = ' and '.join(markers)
         return cls(**_pipfile)
 
     @staticmethod
@@ -481,6 +515,8 @@ class PipenvRequirement(object):
         if vcs or is_vcs(_line):
             _line = uri or path or line
             _line = '{0}{1}'.format(_editable, _line)
+        elif link and path and not uri:
+            _line = link.url
         req = first(requirements.parse(_line))
         req.line = _line
         if editable:
