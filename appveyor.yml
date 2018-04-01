@@ -26,7 +26,7 @@ environment:
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
-      TEST_SUITE: "dotvenv or check or unused or requirements"
+      TEST_SUITE: '"dotvenv or check or unused or requirements"'
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
@@ -34,7 +34,7 @@ environment:
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
-      TEST_SUITE: "markers or run or project or utils"
+      TEST_SUITE: '"markers or run or project or utils"'
 
     - PYTHON: "C:\\Python27-x64"
       PYTHON_VERSION: "2.7.x"
@@ -46,7 +46,7 @@ environment:
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "3.6.x"
-      TEST_SUITE: "dotvenv or check or unused or requirements"
+      TEST_SUITE: '"dotvenv or check or unused or requirements"'
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "3.6.x"
@@ -54,7 +54,7 @@ environment:
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "3.6.x"
-      TEST_SUITE: "markers or run or project or utils"
+      TEST_SUITE: '"markers or run or project or utils"'
 
     - PYTHON: "C:\\Python36-x64"
       PYTHON_VERSION: "2.7.x"
@@ -72,4 +72,4 @@ cache:
   - "%LocalAppData%\\pip\\cache"
 
 test_script:
-  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE%
+  - cmd: set PYPI_VENDOR_DIR=".\tests\pypi\" && pipenv run pytest -v -n auto -m %TEST_SUITE% tests
