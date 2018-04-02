@@ -60,7 +60,7 @@ if six.PY2:
 specifiers = [k for k in lookup.keys()]
 # List of version control systems we support.
 VCS_LIST = ('git', 'svn', 'hg', 'bzr')
-SCHEME_LIST = ('http://', 'https://', 'ftp://', 'file://')
+SCHEME_LIST = ('http://', 'https://', 'ftp://', 'ftps://', 'file://')
 requests = requests.Session()
 
 

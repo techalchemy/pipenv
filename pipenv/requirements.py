@@ -30,7 +30,9 @@ def _validate_vcs(instance, attr, value):
     if value not in VCS_LIST:
         raise ValueError('Invalid vcs {0}'.format(value))
 
-_optional_instance_of = lambda cls: validators.optional(validators.instance_of(cls))
+
+def _optional_instance_of(cls):
+    return validators.optional(validators.instance_of(cls))
 
 
 @attrs
@@ -330,7 +332,6 @@ class PipenvRequirement(object):
             line = line.split(' ', 1)[1]
         line, markers = cls._split_markers(line)
         line, extras = _strip_extras(line)
-        req_dict = defaultdict(None)
         vcs = None
         if is_installable_file(line):
             req_dict = cls._prep_path(line)
@@ -598,8 +599,10 @@ def _extras_to_string(extras):
 
 
 def build_vcs_link(
-    vcs, uri, name=None, ref=None, subdirectory=None, extras= []
+    vcs, uri, name=None, ref=None, subdirectory=None, extras=None
 ):
+    if extras is None:
+        extras = []
     vcs_start = '{0}+'.format(vcs)
     if not uri.startswith(vcs_start):
         uri = '{0}{1}'.format(vcs_start, uri)
