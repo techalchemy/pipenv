@@ -442,7 +442,6 @@ def multi_split(s, split):
 def convert_deps_from_pip(dep):
     """"Converts a pip-formatted dependency to a Pipfile-formatted one."""
     from .requirements import PipenvRequirement
-    dependency = {}
     req = PipenvRequirement.from_line(dep)
     return req.as_pipfile()
 
