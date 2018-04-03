@@ -98,17 +98,17 @@ class Source(object):
 @attrs
 class PipenvMarkers(object):
     """System-level requirements - see PEP508 for more detail"""
-    os_name = attrib(default=None, validator=_validate_markers)
-    sys_platform = attrib(default=None, validator=_validate_markers)
-    platform_machine = attrib(default=None, validator=_validate_markers)
-    platform_python_implementation = attrib(default=None, validator=_validate_markers)
-    platform_release = attrib(default=None, validator=_validate_markers)
-    platform_system = attrib(default=None, validator=_validate_markers)
-    platform_version = attrib(default=None, validator=_validate_markers)
-    python_version = attrib(default=None, validator=_validate_markers)
-    python_full_version = attrib(default=None, validator=_validate_markers)
-    implementation_name = attrib(default=None, validator=_validate_markers)
-    implementation_version = attrib(default=None, validator=_validate_markers)
+    os_name = attrib(default=None, validator=validators.optional(_validate_markers))
+    sys_platform = attrib(default=None, validator=validators.optional(_validate_markers))
+    platform_machine = attrib(default=None, validator=validators.optional(_validate_markers))
+    platform_python_implementation = attrib(default=None, validator=validators.optional(_validate_markers))
+    platform_release = attrib(default=None, validator=validators.optional(_validate_markers))
+    platform_system = attrib(default=None, validator=validators.optional(_validate_markers))
+    platform_version = attrib(default=None, validator=validators.optional(_validate_markers))
+    python_version = attrib(default=None, validator=validators.optional(_validate_markers))
+    python_full_version = attrib(default=None, validator=validators.optional(_validate_markers))
+    implementation_name = attrib(default=None, validator=validators.optional(_validate_markers))
+    implementation_version = attrib(default=None, validator=validators.optional(_validate_markers))
 
     @property
     def line_part(self):
