@@ -29,6 +29,34 @@ except ImportError:
 HASH_STRING = ' --hash={0}'
 
 
+
+def _strip_ssh_from_git_uri(uri):
+    """Return git+ssh:// formatted URI to git+git@ format"""
+    if isinstance(uri, six.string_types):
+        uri = uri.replace('git+ssh://', 'git+')
+    return uri
+
+
+def _clean_git_uri(uri):
+    """Cleans VCS uris from pip9 format"""
+    if isinstance(uri, six.string_types):
+        # Add scheme for parsing purposes, this is also what pip does
+        if uri.startswith('git+') and '://' not in uri:
+            uri = uri.replace('git+', 'git+ssh://')
+    return uri
+
+
+def _split_vcs_method(uri):
+    """Split a vcs+uri formatted uri into (vcs, uri)"""
+    vcs_start = '{0}+'
+    vcs = first(
+        [vcs for vcs in VCS_LIST if uri.startswith(vcs_start.format(vcs))]
+    )
+    if vcs:
+        vcs, uri = uri.split('+', 1)
+    return vcs, uri
+
+
 def _validate_vcs(instance, attr_, value):
     if value not in VCS_LIST:
         raise ValueError('Invalid vcs {0!r}'.format(value))
@@ -52,7 +80,9 @@ def _validate_specifiers(instance, attr_, value):
     except InvalidMarker:
         raise ValueError('Invalid Specifiers {0}'.format(value))
 
-_optional_instance_of = lambda cls: validators.optional(validators.instance_of(cls))
+
+def _optional_instance_of(cls):
+    return validators.optional(validators.instance_of(cls))
 
 
 @attrs
@@ -92,7 +122,7 @@ class PipenvMarkers(object):
 @attrs
 class NamedRequirement(object):
     name = attrib()
-    version = attrib(validator=_validate_specifiers)
+    version = attrib(validator=validators.optional(_validate_specifiers))
     req = attrib(default=None)
 
     @classmethod
@@ -115,7 +145,7 @@ class NamedRequirement(object):
 class FileRequirement(object):
     """File requirements for tar.gz installable files or wheels or setup.py
     containing directories."""
-    path = attrib(default=None, validator=_validate_path)
+    path = attrib(default=None, validator=validators.optional(_validate_path))
     #: path to hit - without any of the VCS prefixes (like git+ / http+ / etc)
     uri = attrib()
     name = attrib()
@@ -145,7 +175,7 @@ class FileRequirement(object):
     @link.default
     def get_link(self):
         target = '{0}#egg={1}'.format(self.uri, self.name)
-        return Link(self.uri)
+        return Link(target)
 
     @property
     def line_part(self):
@@ -164,11 +194,15 @@ class FileRequirement(object):
 
 @attrs
 class VCSRequirement(FileRequirement):
+    link = attrib()
+    name = attrib()
+    req = attrib()
     #: vcs reference name (branch / commit / tag)
     ref = attrib(default=None)
     subdirectory = attrib(default=None)
+    path = attrib(default=None)
     vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
-    uri = attrib(converter=_clean_git_uri)
+    uri = attrib(default=None, converter=_clean_git_uri)
 
     @link.default
     def get_link(self):
@@ -191,11 +225,13 @@ class VCSRequirement(FileRequirement):
 
     @classmethod
     def from_line(cls, line, editable=None):
+        path = None
         if line.startswith('-e '):
             editable = True
             line = line.split(' ', 1)[1]
-        if not is_valid_url(line):
-            line = path_to_url(line)
+        if not is_valid_url(line) and os.path.exists(line):
+            path = get_converted_relative_path(line)
+            line = path_to_url(os.path.abspath(line))
         link = Link(line)
         name = link.egg_fragment
         uri = link.url_without_fragment
@@ -229,7 +265,7 @@ class NewRequirement(object):
     vcs = attrib(default=None, validator=validators.optional(_validate_vcs))
     req = attrib(default=None, validator=_optional_instance_of(FileRequirement))
     markers = attrib(default=None)
-    specifiers = attrib(default=None, validator=_validate_specifiers)
+    specifiers = attrib(default=None, validator=validators.optional(_validate_specifiers))
     index = attrib(default=None)
     editable = attrib(default=None)
     extras = attrib(default=Factory(list))
@@ -243,7 +279,7 @@ class NewRequirement(object):
             line, hashes = hashes[0], hashes[1:]
         original_line = line
         editable = line.startswith('-e ')
-        line = line.split(' 'm 1) if editable else line
+        line = line.split(' ', 1)[1] if editable else line
         line, markers = PipenvRequirement._split_markers(line)
         line, extras = _strip_extras(line)
         vcs = None
@@ -251,8 +287,10 @@ class NewRequirement(object):
             r = FileRequirement(path=line)
         elif is_vcs(line):
             r = VCSRequirement.from_line(line)
+            vcs = r.vcs
         else:
             r = NamedRequirement.from_line(line)
+        return cls(name=r.req.name, vcs=vcs, req=r, markers=markers, extras=extras, editable=editable, hashes=hashes)
 
 
 @attrs
@@ -516,7 +554,6 @@ class PipenvRequirement(object):
             line = line.split(' ', 1)[1]
         line, markers = cls._split_markers(line)
         line, extras = _strip_extras(line)
-        req_dict = defaultdict(None)
         vcs = None
         if is_installable_file(line):
             req_dict = cls._prep_path(line)
@@ -746,33 +783,6 @@ class PipenvRequirement(object):
         return req
 
 
-def _strip_ssh_from_git_uri(uri):
-    """Return git+ssh:// formatted URI to git+git@ format"""
-    if isinstance(uri, six.string_types):
-        uri = uri.replace('git+ssh://', 'git+')
-    return uri
-
-
-def _clean_git_uri(uri):
-    """Cleans VCS uris from pip9 format"""
-    if isinstance(uri, six.string_types):
-        # Add scheme for parsing purposes, this is also what pip does
-        if uri.startswith('git+') and '://' not in uri:
-            uri = uri.replace('git+', 'git+ssh://')
-    return uri
-
-
-def _split_vcs_method(uri):
-    """Split a vcs+uri formatted uri into (vcs, uri)"""
-    vcs_start = '{0}+'
-    vcs = first(
-        [vcs for vcs in VCS_LIST if uri.startswith(vcs_start.format(vcs))]
-    )
-    if vcs:
-        vcs, uri = uri.split('+', 1)
-    return vcs, uri
-
-
 def _extras_to_string(extras):
     """Turn a list of extras into a string"""
     if isinstance(extras, six.string_types):
@@ -785,8 +795,10 @@ def _extras_to_string(extras):
 
 
 def build_vcs_link(
-    vcs, uri, name=None, ref=None, subdirectory=None, extras= []
+    vcs, uri, name=None, ref=None, subdirectory=None, extras=None
 ):
+    if extras is None:
+        extras = []
     vcs_start = '{0}+'.format(vcs)
     if not uri.startswith(vcs_start):
         uri = '{0}{1}'.format(vcs_start, uri)
