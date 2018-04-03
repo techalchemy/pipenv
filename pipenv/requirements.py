@@ -621,7 +621,8 @@ class PipenvRequirement(object):
         req_dict = {}
         req = self.requirement
         req_dict = {}
-        if req.local_file:
+        # hash paths of local files or remote zip/tarballs in non-editable mode
+        if req.local_file or (req.uri and not any([req.vcs, req.name, req.link])):
             hashable_path = req.uri or req.path
             dict_key = 'file' if req.uri else 'path'
             hashed_path = hashlib.sha256(
