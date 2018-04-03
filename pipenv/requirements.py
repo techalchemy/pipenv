@@ -322,6 +322,7 @@ class NewRequirement(object):
 class PipfileRequirement(object):
     path = attrib(default=None)
     uri = attrib(default=None)
+    file = attrib(default=None)
     name = attrib(default=None)
     extras = attrib(default=Factory(list))
     markers = attrib(default='')
