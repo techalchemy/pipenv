@@ -222,17 +222,23 @@ class FileRequirement(BaseRequirement):
         hash_fragment = hashed_loc[-7:]
         return hash_fragment
 
-    @req.default
-    def get_requirement(self):
-        base = '{0}'.format(self.link)
-        if self.editable:
-            base = '-e {0}'.format(base)
-        return first(requirements.parse(base))
-
     @link.default
     def get_link(self):
         target = '{0}#egg={1}'.format(self.uri, self.name)
         return Link(target)
+
+    @req.default
+    def get_requirement(self):
+        base = '{0}'.format(self.link)
+        req = first(requirements.parse(base))
+        if self.editable:
+            req.editable = True
+        if self.link and self.link.scheme.startswith('file') and self.path:
+            req.path = self.path
+            req.local_file = True
+            req.uri = None
+        req.link = self.link
+        return req
 
     @classmethod
     def from_line(cls, line):
@@ -294,15 +300,15 @@ class VCSRequirement(FileRequirement):
     subdirectory = attrib(default=None)
     path = attrib(default=None)
     vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
-    uri = attrib(default=None, converter=_clean_git_uri)
+    uri = attrib(default=None)
 
     @link.default
     def get_link(self):
-        return build_vcs_link(self.vcs, self.uri, self.name, self.subdirectory)
+        return build_vcs_link(self.vcs, _clean_git_uri(self.uri), self.name, self.subdirectory)
 
     @name.default
     def get_name(self):
-        return self.link.egg_fragment or self.link.filename
+        return self.link.egg_fragment or self.req.name if self.req else self.link.filename
 
     @property
     def vcs_uri(self):
@@ -313,7 +319,17 @@ class VCSRequirement(FileRequirement):
 
     @req.default
     def get_requirement(self):
-        return first(requirements.parse(self.line_part))
+        req = first(requirements.parse(self.line_part))
+        if self.path and self.link and self.link.scheme.startswith('file'):
+            req.local_file = True
+            req.path = self.path
+        if self.editable:
+            req.editable = True
+        req.link = self.link
+        if self.uri != self.link.url and 'git+ssh://' in self.link.url and 'git+git@' in self.uri:
+            req.line = _strip_ssh_from_git_uri(req.line)
+            req.uri = _strip_ssh_from_git_uri(req.uri)
+        return req
 
     @classmethod
     def from_pipfile(cls, name, pipfile):
@@ -421,6 +437,12 @@ class NewRequirement(object):
 
         return ''
 
+    @specifiers.default
+    def get_specifiers(self):
+        if self.req and self.req.req.specifier:
+            return self.req.req.specifier
+        return
+
     @classmethod
     def from_line(cls, line):
         hashes = None
@@ -442,7 +464,7 @@ class NewRequirement(object):
             r = NamedRequirement.from_line(line)
         r.extras = first(
             requirements.parse('fakepkg{0}'.format(_extras_to_string(extras)))
-        )
+        ).extras
         return cls(
             name=r.req.name,
             vcs=vcs,
@@ -478,6 +500,7 @@ class NewRequirement(object):
 class PipfileRequirement(object):
     path = attrib(default=None)
     uri = attrib(default=None)
+    file = attrib(default=None)
     name = attrib(default=None)
     extras = attrib(default=Factory(list))
     markers = attrib(default='')
@@ -566,9 +589,14 @@ class PipfileRequirement(object):
         req_uri = self.uri
         if self.path and not self.uri:
             req_uri = path_to_url(os.path.abspath(self.path))
-        line = self._link.url if self._link else (
-            req_uri if req_uri else self.pip_version
-        )
+        if self._link:
+            line = self._link.url
+        elif req_uri:
+            line = req_uri
+        elif self.file:
+            line = self.file
+        else:
+            line = self.pip_version
         return PipenvRequirement._create_requirement(
             name=self.pip_version,
             path=self.path,
@@ -781,7 +809,8 @@ class PipenvRequirement(object):
         req_dict = {}
         req = self.requirement
         req_dict = {}
-        if req.local_file:
+        # hash paths of local files or remote zip/tarballs in non-editable mode
+        if req.local_file or (req.uri and not any([req.vcs, req.name, req.link])):
             hashable_path = req.uri or req.path
             dict_key = 'file' if req.uri else 'path'
             hashed_path = hashlib.sha256(
@@ -927,10 +956,10 @@ class PipenvRequirement(object):
         _line = line or uri or path or name
         # We don't want to only use the name on properly
         # formatted VCS inputs
-        if link:
+        if link and not vcs:
             _line = link.url
         elif vcs or is_vcs(_line):
-            _line = uri or path or line
+            _line = uri or path or line or _clean_git_uri(link.url)
             _line = '{0}{1}'.format(_editable, _line)
         req = first(requirements.parse(_line))
         req.line = line or path or uri or getattr(link, 'url', req.line)
