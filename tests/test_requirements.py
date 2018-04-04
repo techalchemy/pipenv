@@ -1,7 +1,7 @@
 # -*- coding=utf-8 -*-
 import os
 import pytest
-from first import first
+from pipenv.vendor.first import first
 from pipenv import requirements
 from pipenv.utils import get_requirement, convert_deps_from_pip, convert_deps_to_pip
 
@@ -30,5 +30,11 @@ class TestRequirements:
         pipfile_pkgname = first([k for k in pipfile.keys()])
         pipfile_entry = pipfile[pipfile_pkgname]
         from_pipfile = requirements.NewRequirement.from_pipfile(pipfile_pkgname, [], pipfile_entry)
-        assert from_line.as_pipfile() == pipfile
-        assert from_pipfile.as_requirement() == line
+        pf = from_line.as_pipfile()
+        extra_keys = ['link', 'req']
+        pf_name = first(pf.keys())
+        for k in extra_keys:
+            if k in pf[pf_name]:
+                del pf[pf_name][k]
+        assert pf == pipfile
+        assert from_pipfile.as_line() == line

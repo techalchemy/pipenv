@@ -76,7 +76,7 @@ def get_requirement(dep):
     :param str dep: A requirement line
     :returns: :class:`requirements.Requirement` object
     """
-    from .requirements import PipenvRequirement
+    from .requirements import NewRequirement as PipenvRequirement
     return PipenvRequirement.from_line(dep).requirement
 
 
@@ -441,7 +441,7 @@ def multi_split(s, split):
 
 def convert_deps_from_pip(dep):
     """"Converts a pip-formatted dependency to a Pipfile-formatted one."""
-    from .requirements import PipenvRequirement
+    from .requirements import NewRequirement as PipenvRequirement
     req = PipenvRequirement.from_line(dep)
     return req.as_pipfile()
 
@@ -456,14 +456,14 @@ def is_pinned(val):
 
 def convert_deps_to_pip(deps, project=None, r=True, include_index=False):
     """"Converts a Pipfile-formatted dependency to a pip-formatted one."""
-    from .requirements import PipenvRequirement
+    from .requirements import NewRequirement as PipenvRequirement
     dependencies = []
     for dep_name, dep in deps.items():
         indexes = project.sources if hasattr(project, 'sources') else None
         if hasattr(dep, 'keys') and dep.get('index'):
             indexes = project.get_source(dep['index'])
         new_dep = PipenvRequirement.from_pipfile(dep_name, indexes, dep)
-        req = new_dep.as_requirement(project=project, include_index=include_index)
+        req = new_dep.as_line(project=project, include_index=include_index)
         req = req.strip()
         dependencies.append(req)
     if not r:

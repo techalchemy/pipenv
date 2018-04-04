@@ -67,12 +67,14 @@ def _validate_path(instance, attr_, value):
 
 def _validate_markers(instance, attr_, value):
     try:
-        Marker('{0}{1}'.format(attr_, value))
+        Marker('{0}{1}'.format(attr_.name, value))
     except InvalidMarker:
         raise ValueError('Invalid Marker {0}{1}'.format(attr_, value))
 
 
 def _validate_specifiers(instance, attr_, value):
+    if value == '':
+        return True
     try:
         SpecifierSet(value)
     except InvalidMarker:
@@ -180,9 +182,11 @@ class PipenvMarkers(BaseRequirement):
         marker = Marker(marker_string)
         marker_dict = {}
         for m in marker._markers:
+            if isinstance(m, six.string_types):
+                continue
             var, op, val = m
-            if var in cls.attr_fields():
-                marker_dict[var] = '{0} "{1}"'.format(op, val)
+            if var.value in cls.attr_fields():
+                marker_dict[var.value] = '{0} "{1}"'.format(op, val)
         return marker_dict
 
     @classmethod
@@ -214,27 +218,36 @@ class NamedRequirement(BaseRequirement):
 
     @req.default
     def get_requirement(self):
-        return first(requirements.parse('{0}'.format(self.line_part)))
+        return first(requirements.parse('{0}{1}'.format(self.name, self.version)))
 
     @classmethod
     def from_line(cls, line):
         req = first(requirements.parse(line))
-        return cls(name=req.name, version=req.specifier, req=req)
+        specifiers = None
+        if req.specifier:
+            specifiers = _specs_to_string(req.specs)
+        return cls(name=req.name, version=specifiers, req=req)
 
     @classmethod
     def from_pipfile(cls, name, pipfile):
-        creation_args = {k: v for k, v in pipfile.items()}
+        creation_args = {}
+        if hasattr(pipfile, 'keys'):
+            creation_args = {k: v for k, v in pipfile.items() if k in cls.attr_fields()}
         creation_args['name'] = name
-        creation_args['version'] = _get_version(pipfile)
+        version = _get_version(pipfile)
+        creation_args['version'] = version
+        creation_args['req'] = first(requirements.parse('{0}{1}'.format(name, version)))
         return cls(**creation_args)
 
     @property
     def line_part(self):
-        return '{self.name}{self.version}'.format(self=self)
+        return '{self.name}'.format(self=self)
 
     @property
     def pipfile_part(self):
         pipfile_dict = attr.asdict(self, filter=_filter_none)
+        if 'version' not in pipfile_dict:
+            pipfile_dict['version'] = '*'
         name = pipfile_dict.pop('name')
         return {name: pipfile_dict}
 
@@ -335,23 +348,24 @@ class FileRequirement(BaseRequirement):
 
 @attrs
 class VCSRequirement(FileRequirement):
-    link = attrib()
-    name = attrib()
-    req = attrib()
+    editable = attrib(default=None)
+    uri = attrib(default=None)
+    path = attrib(default=None, validator=validators.optional(_validate_path))
+    vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
     # : vcs reference name (branch / commit / tag)
     ref = attrib(default=None)
     subdirectory = attrib(default=None)
-    path = attrib(default=None)
-    vcs = attrib(validator=validators.optional(_validate_vcs), default=None)
-    uri = attrib(default=None)
+    name = attrib()
+    link = attrib()
+    req = attrib()
 
     @link.default
     def get_link(self):
-        return build_vcs_link(self.vcs, _clean_git_uri(self.uri), self.name, self.subdirectory)
+        return build_vcs_link(self.vcs, _clean_git_uri(self.uri), name=self.name, ref=self.ref, subdirectory=self.subdirectory)
 
     @name.default
     def get_name(self):
-        return self.link.egg_fragment or self.req.name if self.req else self.link.filename
+        return self.link.egg_fragment or self.req.name if self.req else ''
 
     @property
     def vcs_uri(self):
@@ -386,7 +400,12 @@ class VCSRequirement(FileRequirement):
             if k in pipfile
         ]
         for key in pipfile_keys:
-            creation_args[key] = pipfile.get(key)
+            if key in VCS_LIST:
+                creation_args['vcs'] = key
+                target_key = 'uri' if is_valid_url(pipfile.get(key)) else 'path'
+                creation_args[target_key] = pipfile.get(key)
+            else:
+                creation_args[key] = pipfile.get(key)
         creation_args['name'] = name
         return cls(**creation_args)
 
@@ -483,7 +502,7 @@ class NewRequirement(object):
     @specifiers.default
     def get_specifiers(self):
         if self.req and self.req.req.specifier:
-            return self.req.req.specifier
+            return _specs_to_string(self.req.req.specs)
         return
 
     @classmethod
@@ -492,7 +511,6 @@ class NewRequirement(object):
         if '--hash=' in line:
             hashes = line.split(' --hash=')
             line, hashes = hashes[0], hashes[1:]
-        original_line = line
         editable = line.startswith('-e ')
         line = line.split(' ', 1)[1] if editable else line
         line, markers = PipenvRequirement._split_markers(line)
@@ -506,41 +524,88 @@ class NewRequirement(object):
             r = VCSRequirement.from_line(line)
             vcs = r.vcs
         else:
+            name = multi_split(line, '!=<>~')[0]
+            if not extras:
+                name, extras = _strip_extras(name)
             r = NamedRequirement.from_line(line)
         if extras:
-            r.extras = first(
+            extras = first(
                 requirements.parse('fakepkg{0}'.format(_extras_to_string(extras)))
             ).extras
+            r.req.extras = extras
         args = {
             'name': r.name,
             'vcs': vcs,
             'req': r,
             'markers': markers,
-            'extras': extras,
             'editable': editable,
         }
+        if extras:
+            args['extras'] = extras
         if hashes:
             args['hashes'] = hashes
         return cls(**args)
 
-    @property
-    def as_line(self):
-        return '{0}{1}{2}{3}{4} {5}'.format(
+    @classmethod
+    def from_pipfile(cls, name, indexes, pipfile):
+        _pipfile = {}
+        if hasattr(pipfile, 'keys'):
+            _pipfile = dict(pipfile).copy()
+        _pipfile['version'] = _get_version(pipfile)
+        vcs = first([vcs for vcs in VCS_LIST if vcs in _pipfile])
+        if vcs:
+            _pipfile['vcs'] = vcs
+            r = VCSRequirement.from_pipfile(name, pipfile)
+        elif any(key in pipfile for key in ['path', 'file', 'uri']):
+            r = FileRequirement.from_pipfile(name, pipfile)
+        else:
+            r = NamedRequirement.from_pipfile(name, pipfile)
+        args = {
+            'name': r.name,
+            'vcs': vcs,
+            'req': r,
+            'markers': PipenvMarkers.from_pipfile(name, _pipfile).line_part,
+            'extras': _pipfile.get('extras'),
+            'editable': _pipfile.get('editable', False),
+            'index': _pipfile.get('index')
+        }
+        if any(key in _pipfile for key in ['hash', 'hashes']):
+            args['hashes'] = _pipfile.get('hashes', [pipfile.get('hash')])
+        return cls(**args)
+
+    def as_line(self, include_index=False, project=None):
+        line = '{0}{1}{2}{3}{4}'.format(
             self.req.line_part,
             self.extras_as_pip,
-            self.requirement.specs,
+            self.specifiers if self.specifiers else '',
             self.markers_as_pip,
             self.hashes_as_pip,
-            self.index,
         )
+        if include_index and not (self.requirement.local_file or self.vcs):
+            from .utils import prepare_pip_source_args
+            if self.index:
+                pip_src_args = [project.get_source(self.index)]
+            else:
+                pip_src_args = project.sources
+            index_string = ' '.join(prepare_pip_source_args(pip_src_args))
+            line = '{0} {1}'.format(line, index_string)
+        return line
 
-    @property
-    def as_pipfile(self):
+    def as_pipfile(self, include_index=False):
         good_keys = ('hashes', 'path', 'uri', 'file', 'extras', 'markers', 'editable', 'vcs', 'version', 'index', 'ref', 'subdirectory') + VCS_LIST
         req_dict = {k: v for k, v in attr.asdict(self, recurse=False, filter=_filter_none).items() if k in good_keys}
         name = self.name
-        base_dict = self.req.pipfile_part[name].copy()
+        base_dict = {k: v for k, v in self.req.pipfile_part[name].copy().items() if k not in ['req', 'link']}
         base_dict.update(req_dict)
+        if 'hashes' in base_dict and len(base_dict['hashes']) == 1:
+            base_dict['hash'] = base_dict.pop('hashes')[0]
+        if 'vcs' in base_dict:
+            target = first([k for k in base_dict.keys() if k in ['path', 'uri', 'file']])
+            new_key = base_dict.pop('vcs')
+            vcs_loc = base_dict.pop(target)
+            base_dict[new_key] = vcs_loc
+        if len(base_dict.keys()) == 1 and 'version' in base_dict:
+            base_dict = base_dict.get('version')
         return {name: base_dict}
 
 
@@ -1056,6 +1121,15 @@ def _extras_to_string(extras):
     return '[{0}]'.format(','.join(extras))
 
 
+def _specs_to_string(specs):
+    """Turn a list of specifier tuples into a string"""
+    if specs:
+        if isinstance(specs, six.string_types):
+            return specs
+        return ','.join([''.join(spec) for spec in specs])
+    return ''
+
+
 def build_vcs_link(
     vcs, uri, name=None, ref=None, subdirectory=None, extras=None
 ):
@@ -1081,7 +1155,15 @@ def _get_version(pipfile_entry):
     if str(pipfile_entry) == '{}' or is_star(pipfile_entry):
         return ''
 
-    elif isinstance(pipfile_entry, six.string_types):
-        return pipfile_entry
+    elif hasattr(pipfile_entry, 'keys') and 'version' in pipfile_entry:
+        if is_star(pipfile_entry.get('version')):
+            return ''
+        return pipfile_entry.get('version', '')
 
-    return pipfile_entry.get('version', '')
+    return pipfile_entry
+
+if __name__ == "__main__":
+    # req = NewRequirement.from_line(line)
+    req = NewRequirement.from_pipfile(name='FooPoject', indexes=[], pipfile={'hash': 'sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824', 'version': '==1.2'})
+    print(req)
+    # req = NewRequirement.from_pipfile(name='requests', indexes=[], pipfile={'extras': ['socks'], 'version': '*'})

@@ -26,7 +26,7 @@ from requests.packages import urllib3
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 from.project import Project
-from .requirements import PipenvRequirement
+from .requirements import NewRequirement as PipenvRequirement
 from .utils import (
     convert_deps_from_pip,
     convert_deps_to_pip,
