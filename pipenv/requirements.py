@@ -79,6 +79,12 @@ def _validate_specifiers(instance, attr_, value):
         raise ValueError('Invalid Specifiers {0}'.format(value))
 
 
+def _filter_none(k, v):
+    if v:
+        return True
+    return False
+
+
 def _optional_instance_of(cls):
     return validators.optional(validators.instance_of(cls))
 
@@ -96,7 +102,8 @@ class Source(object):
     name = attrib(default='')
 
 
-class BaseRequirement(abc.ABCMeta):
+@six.add_metaclass(abc.ABCMeta)
+class BaseRequirement():
 
     @classmethod
     def from_line(cls, line):
@@ -104,7 +111,7 @@ class BaseRequirement(abc.ABCMeta):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def as_line(self):
+    def line_part(self):
         """Returns the current requirement as a pip-compatible line"""
 
     @classmethod
@@ -115,6 +122,10 @@ class BaseRequirement(abc.ABCMeta):
     @abc.abstractmethod
     def pipfile_part(self):
         """Returns the current requirement as a pipfile entry"""
+
+    @classmethod
+    def attr_fields(cls):
+        return [field.name for field in attr.fields(cls)]
 
 
 @attrs
@@ -157,27 +168,57 @@ class PipenvMarkers(BaseRequirement):
     @property
     def line_part(self):
         return ' and '.join(
-            ['{0} {1}'.format(k, v) for k, v in self.__dict__.items() if v]
+            ['{0} {1}'.format(k, v) for k, v in attr.asdict(self, filter=_filter_none).items()]
         )
 
     @property
     def pipfile_part(self):
         return {'markers': self.as_line}
 
+    @classmethod
+    def make_marker(cls, marker_string):
+        marker = Marker(marker_string)
+        marker_dict = {}
+        for m in marker._markers:
+            var, op, val = m
+            if var in cls.attr_fields():
+                marker_dict[var] = '{0} "{1}"'.format(op, val)
+        return marker_dict
+
+    @classmethod
+    def from_line(cls, line):
+        if ';' in line:
+            line = line.rsplit(';', 1)[1].strip()
+        marker_dict = cls.make_marker(line)
+        return cls(**marker_dict)
+
+    @classmethod
+    def from_pipfile(cls, name, pipfile):
+        found_keys = [k for k in pipfile.keys() if k in cls.attr_fields()]
+        marker_strings = ['{0} {1}'.format(k, pipfile[k]) for k in found_keys]
+        if pipfile.get('markers'):
+            marker_strings.append(pipfile.get('markers'))
+        markers = {}
+        for marker in marker_strings:
+            marker_dict = cls.make_marker(marker)
+            if marker_dict:
+                markers.update(marker_dict)
+        return cls(**markers)
+
 
 @attrs
 class NamedRequirement(BaseRequirement):
     name = attrib()
     version = attrib(validator=validators.optional(_validate_specifiers))
-    req = attrib(default=None)
+    req = attrib()
 
     @req.default
     def get_requirement(self):
-        return requirements.parse('{0}'.format(self.line_part))
+        return first(requirements.parse('{0}'.format(self.line_part)))
 
     @classmethod
     def from_line(cls, line):
-        req = requirements.parse(line)
+        req = first(requirements.parse(line))
         return cls(name=req.name, version=req.specifier, req=req)
 
     @classmethod
@@ -193,7 +234,7 @@ class NamedRequirement(BaseRequirement):
 
     @property
     def pipfile_part(self):
-        pipfile_dict = attr.asdict(self)
+        pipfile_dict = attr.asdict(self, filter=_filter_none)
         name = pipfile_dict.pop('name')
         return {name: pipfile_dict}
 
@@ -260,13 +301,15 @@ class FileRequirement(BaseRequirement):
                 path = _path.as_posix()
             else:
                 path = get_converted_relative_path(line)
-        return cls(
-            name=link.egg_fragment,
-            path=path,
-            uri=link.url_without_fragment,
-            link=link,
-            editable=editable,
-        )
+        arg_dict = {
+            'path': path,
+            'uri': link.url_without_fragment,
+            'link': link,
+            'editable': editable
+        }
+        if link.egg_fragment:
+            arg_dict['name'] = link.egg_fragment
+        return cls(**arg_dict)
 
     @classmethod
     def from_pipfile(cls, name, pipfile):
@@ -283,7 +326,7 @@ class FileRequirement(BaseRequirement):
 
     @property
     def pipfile_part(self):
-        pipfile_dict = {k: v for k, v in self.__dict__.items() if v}
+        pipfile_dict = {k: v for k, v in attr.asdict(self, filter=_filter_none).items()}
         name = pipfile_dict.pop('name')
         if self.path:
             pipfile_dict.pop('uri')
@@ -385,7 +428,7 @@ class VCSRequirement(FileRequirement):
 
     @property
     def pipfile_part(self):
-        pipfile_dict = {k: v for k, v in self.__dict__.items() if v}
+        pipfile_dict = {k: v for k, v in attr.asdict(self, filter=_filter_none).items()}
         name = pipfile_dict.pop('name')
         if self.path:
             pipfile_dict.pop('uri')
@@ -394,18 +437,18 @@ class VCSRequirement(FileRequirement):
 
 @attrs
 class NewRequirement(object):
-    name = attrib(default='')
+    name = attrib()
     vcs = attrib(default=None, validator=validators.optional(_validate_vcs))
     req = attrib(
         default=None, validator=_optional_instance_of(BaseRequirement)
     )
     markers = attrib(default=None)
     specifiers = attrib(
-        default=None, validator=validators.optional(_validate_specifiers)
+        validator=validators.optional(_validate_specifiers)
     )
     index = attrib(default=None)
     editable = attrib(default=None)
-    hashes = attrib(default=None, converter=list)
+    hashes = attrib(default=Factory(list), converter=list)
     extras = attrib(default=Factory(list))
 
     @name.default
@@ -455,25 +498,30 @@ class NewRequirement(object):
         line, markers = PipenvRequirement._split_markers(line)
         line, extras = _strip_extras(line)
         vcs = None
-        if is_installable_file(line):
-            r = FileRequirement(path=line)
+        # Installable local files and installable non-vcs urls are handled
+        # as files, generally speaking
+        if is_installable_file(line) or (is_valid_url(line) and not is_vcs(line)):
+            r = FileRequirement.from_line(line)
         elif is_vcs(line):
             r = VCSRequirement.from_line(line)
             vcs = r.vcs
         else:
             r = NamedRequirement.from_line(line)
-        r.extras = first(
-            requirements.parse('fakepkg{0}'.format(_extras_to_string(extras)))
-        ).extras
-        return cls(
-            name=r.req.name,
-            vcs=vcs,
-            req=r,
-            markers=markers,
-            extras=extras,
-            editable=editable,
-            hashes=hashes,
-        )
+        if extras:
+            r.extras = first(
+                requirements.parse('fakepkg{0}'.format(_extras_to_string(extras)))
+            ).extras
+        args = {
+            'name': r.name,
+            'vcs': vcs,
+            'req': r,
+            'markers': markers,
+            'extras': extras,
+            'editable': editable,
+        }
+        if hashes:
+            args['hashes'] = hashes
+        return cls(**args)
 
     @property
     def as_line(self):
@@ -489,10 +537,10 @@ class NewRequirement(object):
     @property
     def as_pipfile(self):
         good_keys = ('hashes', 'path', 'uri', 'file', 'extras', 'markers', 'editable', 'vcs', 'version', 'index', 'ref', 'subdirectory') + VCS_LIST
-        req_dict = attr.asdict(self, recurse=False)
-        name = first(self.req.pipfile_part.keys())
-        base_dict = self.req.pipfile_part['name'].copy()
-        base_dict.update({k: v for k, v in req_dict if k in good_keys and v is not None})
+        req_dict = {k: v for k, v in attr.asdict(self, recurse=False, filter=_filter_none).items() if k in good_keys}
+        name = self.name
+        base_dict = self.req.pipfile_part[name].copy()
+        base_dict.update(req_dict)
         return {name: base_dict}
 
 

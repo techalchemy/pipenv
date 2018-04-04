@@ -26,9 +26,9 @@ class TestRequirements:
         ]
     )
     def test_pip_requirements(self, line, pipfile):
-        from_line = requirements.PipenvRequirement.from_line(line)
+        from_line = requirements.NewRequirement.from_line(line)
         pipfile_pkgname = first([k for k in pipfile.keys()])
         pipfile_entry = pipfile[pipfile_pkgname]
-        from_pipfile = requirements.PipenvRequirement.from_pipfile(pipfile_pkgname, [], pipfile_entry)
+        from_pipfile = requirements.NewRequirement.from_pipfile(pipfile_pkgname, [], pipfile_entry)
         assert from_line.as_pipfile() == pipfile
         assert from_pipfile.as_requirement() == line
