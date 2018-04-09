@@ -11,6 +11,11 @@ env:
     - GIT_ASK_YESNO='false'
   matrix:
     - TEST_SUITE='not install'
+      CACHE_NAME=$TRAVIS_PYTHON_VERSION-TEST
+    - TEST_SUITE='install'
+      RUN_INTEGRATION_TESTS='1'
+      PYTEST_ADDOPTS='--cache-clear'
+      CACHE_NAME=$TRAVIS_PYTHON_VERSION-INSTALL
 
 # command to install dependencies
 install:
@@ -24,22 +29,4 @@ script:
   - 'export PYPI_VENDOR_DIR="$(pwd)/tests/pypi/"'
   - 'pip install -e "$(pwd)" --upgrade'
   - 'pipenv install --dev'
-  - 'pipenv run time pytest -v -n auto --ignore="pipenv/vendor" --ignore="pipenv/patched" -m "$TEST_SUITE" tests'
-
-jobs:
-  include:
-    - stage: takes-forever
-      env:
-        - TEST_SUITE='install'
-        - PYTEST_ADDOPTS='--cache-clear'
-        - RUN_INTEGRATION_TESTS=1
-        - CACHE_NAME='INSTALL-PY3'
-    - stage: takes-forever
-      python: "2.7"
-      env:
-        - CACHE_NAME='INSTALL-PY2'
-
-stages:
-  - test
-  - name: takes-forever
-  if: branch = master
+  - 'pipenv run time pytest -v -n 4 --ignore="pipenv/vendor" --ignore="pipenv/patched" -m "$TEST_SUITE" tests'
