@@ -25,6 +25,7 @@ LIBRARY_DIRNAMES = {
     'python-dotenv': 'dotenv',
     'pip-tools': 'piptools',
     'setuptools': 'pkg_resources',
+    'attrs': 'attr',
 }
 
 # from time to time, remove the no longer needed ones
