@@ -55,7 +55,7 @@ try:
     from collections.abc import Mapping
 except ImportError:
     from collections import Mapping
-from .requirements import PipenvRequirement
+from .vendor.requirementslib import Requirement
 
 if six.PY2:
 
@@ -491,13 +491,13 @@ def is_pinned(val):
 def convert_deps_to_pip(deps, project=None, r=True, include_index=False):
     """"Converts a Pipfile-formatted dependency to a pip-formatted one."""
     from ._compat import NamedTemporaryFile
-    from .requirements import PipenvRequirement
+    from .vendor.requirementslib import Requirement
     dependencies = []
     for dep_name, dep in deps.items():
         indexes = project.sources if hasattr(project, 'sources') else None
         if hasattr(dep, 'keys') and dep.get('index'):
             indexes = project.get_source(dep['index'])
-        new_dep = PipenvRequirement.from_pipfile(dep_name, indexes, dep)
+        new_dep = Requirement.from_pipfile(dep_name, indexes, dep)
         req = new_dep.as_line(
             project=project,
             include_index=include_index
