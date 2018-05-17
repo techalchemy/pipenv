@@ -1,34 +1,25 @@
 sudo: false
 dist: trusty
-cache: pip
 language: python
 python:
   - "3.6"
   - "2.7"
 env:
-  - TEST_SUITE='dotvenv or check or unused or requirements'
-  - TEST_SUITE='complex'
-  - TEST_SUITE='markers or run or project or utils'
+  global:
+    - PYPI_VENDOR_DIR='./tests/pypi/'
+    - GIT_ASK_YESNO='false'
+    - PYTHONIOENCODING='utf-8'
+  matrix:
+    - TEST_SUITE='not install'
+    - TEST_SUITE='install'
+      PYTEST_ADDOPTS='--cache-clear'
 
-# command to install dependencies
 install:
   - "pip install --upgrade pip"
   - "pip install -e . --upgrade --upgrade-strategy=only-if-needed"
   - "pipenv install --dev"
+  - 'pip install -e "$(pwd)" --upgrade'
+  - 'pipenv install --system --dev'
 
-# command to run the dependencies
 script:
-  - "pipenv run bash ./run-tests.sh"
-
-jobs:
-  include:
-    - stage: integration
-      env: TEST_SUITE='cli'
-    - stage: takes-forever
-      env: TEST_SUITE='install'
-
-stages:
-  - integration
-  - test
-  - name: takes-forever
-    if: branch = master
+  - 'pipenv run time pytest -v -n 4 -m "$TEST_SUITE" tests'
