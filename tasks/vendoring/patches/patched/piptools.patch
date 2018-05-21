@@ -19,10 +19,23 @@ index 4e6174c..75f9b49 100644
  # NOTE
  # We used to store the cache dir under ~/.pip-tools, which is not the
 diff --git a/pipenv/patched/piptools/repositories/pypi.py b/pipenv/patched/piptools/repositories/pypi.py
-index 1c4b943..e412a1f 100644
+index 1c4b943..d4b3221 100644
 --- a/pipenv/patched/piptools/repositories/pypi.py
 +++ b/pipenv/patched/piptools/repositories/pypi.py
-@@ -15,10 +15,16 @@ from .._compat import (
+@@ -3,9 +3,12 @@ from __future__ import (absolute_import, division, print_function,
+                         unicode_literals)
+ 
+ import hashlib
++import json
+ import os
++import sys
+ from contextlib import contextmanager
+ from shutil import rmtree
++from six import PY3, string_types
+ 
+ from .._compat import (
+     is_file_url,
+@@ -15,13 +18,21 @@ from .._compat import (
      Wheel,
      FAVORITE_HASH,
      TemporaryDirectory,
@@ -30,33 +43,127 @@ index 1c4b943..e412a1f 100644
 +    PyPI,
 +    InstallRequirement,
 +    SafeFileCache,
++    InstallRequirement,
  )
  
-+from notpip._vendor.packaging.requirements import InvalidRequirement
-+from notpip._vendor.pyparsing import ParseException
++from pip._vendor.packaging.requirements import InvalidRequirement
++from pip._vendor.packaging.version import parse as parse_version
++from pip._vendor.pyparsing import ParseException
 +
  from ..cache import CACHE_DIR
 +from pipenv.environments import PIPENV_CACHE_DIR
  from ..exceptions import NoCandidateFound
- from ..utils import (fs_str, is_pinned_requirement, lookup_table,
-                      make_install_requirement)
-@@ -26,15 +32,49 @@ from .base import BaseRepository
+-from ..utils import (fs_str, is_pinned_requirement, lookup_table,
+-                     make_install_requirement)
++from ..utils import (fs_str, is_pinned_requirement, lookup_table, as_tuple,
++                     make_install_requirement, format_requirement)
+ from .base import BaseRepository
  
  
- try:
--    from pip._internal.operations.prepare import RequirementPreparer
--    from pip._internal.resolve import Resolver as PipResolver
-+    from notpip._internal.operations.prepare import RequirementPreparer
-+    from notpip._internal.resolve import Resolver as PipResolver
- except ImportError:
-     pass
+@@ -37,6 +48,142 @@ except ImportError:
+     from pip.wheel import WheelCache
  
- try:
--    from pip._internal.cache import WheelCache
-+    from notpip._internal.cache import WheelCache
- except ImportError:
--    from pip.wheel import WheelCache
-+    from notpip.wheel import WheelCache
+ 
++class DependencyCache(SafeFileCache):
++    """Caches the dependencies of artifacts from specific indexes.
++
++    Should provide significant speedups.
++    """
++    def __init__(self, *args, **kwargs):
++        session = kwargs.pop('session')
++        index = kwargs.pop('index_url')
++        extra_index_urls = list(kwargs.pop('extra_index_urls', []))
++        py_version = '.'.join(str(digit) for digit in sys.version_info[:2])
++        cache_name = os.path.join(py_version, ''.join([index] + extra_index_urls))
++        self.session = session
++        kwargs.setdefault('directory', os.path.join(PIPENV_CACHE_DIR, 'dep-cache', cache_name))
++        super(DependencyCache, self).__init__(*args, **kwargs)
++
++    @staticmethod
++    def as_key(ireq):
++        try:
++            name, version, extras = as_tuple(ireq)
++        except TypeError:
++            try:
++                dist = ireq.get_dist()
++                name = dist.project_name
++                version = dist.version
++            except (TypeError, ValueError):
++                name = ireq.link.egg_fragment
++                if not name:
++                    name, version = ireq.link.filename.rsplit('-', 1)
++                else:
++                    version = ireq.link.show_url
++            extras = ireq.extras
++        if not extras:
++            extras_string = ""
++        else:
++            extras_string = "[{}]".format(",".join(extras))
++        line = format_requirement(ireq, marker=ireq.markers)
++        return name, "{}{}".format(version, extras_string), line
++
++    @staticmethod
++    def serialize_req(ireq):
++        line = None
++        if isinstance(ireq, InstallRequirement):
++            name, version_w_extras, line = DependencyCache.as_key(ireq)
++        return line or format_requirement(ireq, marker=ireq.markers)
++
++    @staticmethod
++    def unserialize_req(ireq):
++        if not ireq:
++            return
++        if isinstance(ireq, InstallRequirement):
++            return ireq
++        if ireq.startswith('-e '):
++            req = InstallRequirement.from_editable(ireq.lstrip('-e '))
++        else:
++            req = InstallRequirement.from_line(ireq)
++        return req
++
++    @staticmethod
++    def serialize_set(req_set):
++        deps = [DependencyCache.serialize_req(ireq) for ireq in req_set]
++        return deps
++
++    @staticmethod
++    def unserialize_set(req_set):
++        new_set = set()
++        for ireq in req_set:
++            new_set.add(DependencyCache.unserialize_req(ireq))
++        return new_set
++
++    def set(self, key, value, *args, **kwargs):
++        if isinstance(key, string_types):
++            # for stringified 'six==x.y[extras] from file:///location
++            key = InstallRequirement.from_line(key.split('from')[0])
++            name, version_w_extras, line = DependencyCache.as_key(key)
++
++        elif isinstance(key, list) or isinstance(key, tuple):
++            name, version_w_extras, line = key
++        else:
++            name, version_w_extras, line = DependencyCache.as_key(key)
++        value = self.serialize_set(value)
++        version_dict = {version_w_extras: value}
++        version_dict = json.dumps(version_dict)
++        if PY3:
++            version_dict = bytes(version_dict, 'utf-8')
++        super(DependencyCache, self).set(name, version_dict, *args, **kwargs)
++
++    def get(self, key, *args, **kwargs):
++        from six import string_types
++        if not isinstance(key, string_types):
++            name, version_w_extras, line = DependencyCache.as_key(key)
++        pkg = super(DependencyCache, self).get(name, *args, **kwargs)
++        req_set = json.loads(pkg, encoding='utf-8').get(version_w_extras) if pkg else None
++        if req_set is None:
++            return
++        return self.unserialize_set(req_set)
++
++    def delete(self, key, *args, **kwargs):
++        if not isinstance(key, string_types):
++            key, _, _ = DependencyCache.as_key(key)
++        super(DependencyCache, self).delete(key, *args, **kwargs)
 +
 +
 +class HashCache(SafeFileCache):
@@ -91,10 +198,12 @@ index 1c4b943..e412a1f 100644
 +            for chunk in iter(lambda: fp.read(8096), b""):
 +                h.update(chunk)
 +        return ":".join([FAVORITE_HASH, h.hexdigest()])
- 
- 
++
++
  class PyPIRepository(BaseRepository):
-@@ -46,10 +86,11 @@ class PyPIRepository(BaseRepository):
+     DEFAULT_INDEX_URL = PyPI.simple_url
+ 
+@@ -46,14 +193,16 @@ class PyPIRepository(BaseRepository):
      config), but any other PyPI mirror can be used if index_urls is
      changed/configured on the Finder.
      """
@@ -108,7 +217,12 @@ index 1c4b943..e412a1f 100644
  
          index_urls = [pip_options.index_url] + pip_options.extra_index_urls
          if pip_options.no_index:
-@@ -74,11 +115,15 @@ class PyPIRepository(BaseRepository):
+             index_urls = []
++        self.indexes = index_urls
+ 
+         self.finder = PackageFinder(
+             find_links=pip_options.find_links,
+@@ -74,11 +223,16 @@ class PyPIRepository(BaseRepository):
          # of all secondary dependencies for the given requirement, so we
          # only have to go to disk once for each requirement
          self._dependencies_cache = {}
@@ -116,6 +230,7 @@ index 1c4b943..e412a1f 100644
 +
 +        # stores *full* path + fragment => sha256
 +        self._hash_cache = HashCache(session=session)
++        self._dep_cache = DependencyCache(session=session, index_url=pip_options.index_url, extra_index_urls=pip_options.extra_index_urls)
  
          # Setup file paths
          self.freshen_build_caches()
@@ -126,7 +241,7 @@ index 1c4b943..e412a1f 100644
  
      def freshen_build_caches(self):
          """
-@@ -116,8 +161,11 @@ class PyPIRepository(BaseRepository):
+@@ -116,8 +270,11 @@ class PyPIRepository(BaseRepository):
  
          all_candidates = self.find_all_candidates(ireq.name)
          candidates_by_version = lookup_table(all_candidates, key=lambda c: c.version, unique=True)
@@ -139,7 +254,7 @@ index 1c4b943..e412a1f 100644
  
          # Reuses pip's internal candidate sort key to sort
          matching_candidates = [candidates_by_version[ver] for ver in matching_versions]
-@@ -126,11 +174,60 @@ class PyPIRepository(BaseRepository):
+@@ -126,11 +283,62 @@ class PyPIRepository(BaseRepository):
          best_candidate = max(matching_candidates, key=self.finder._candidate_sort_key)
  
          # Turn the candidate into a pinned InstallRequirement
@@ -166,7 +281,7 @@ index 1c4b943..e412a1f 100644
 +                r = self.session.get(url)
 +
 +                # TODO: Latest isn't always latest.
-+                latest = list(r.json()['releases'].keys())[-1]
++                latest = sorted(list(r.json()['releases'].keys()), reverse=True)[-1]
 +                if str(ireq.req.specifier) == '=={0}'.format(latest):
 +                    latest_url = 'https://pypi.org/pypi/{0}/{1}/json'.format(ireq.req.name, latest)
 +                    latest_requires = self.session.get(latest_url)
@@ -186,24 +301,26 @@ index 1c4b943..e412a1f 100644
  
      def get_dependencies(self, ireq):
 +        json_results = set()
++        cached_deps = self._dep_cache.get(ireq)
++        if cached_deps is None:
++            if self.use_json:
++                try:
++                    json_results = self.get_json_dependencies(ireq)
++                except TypeError:
++                    json_results = set()
 +
-+        if self.use_json:
-+            try:
-+                json_results = self.get_json_dependencies(ireq)
-+            except TypeError:
-+                json_results = set()
++            legacy_results = self.get_legacy_dependencies(ireq)
++            json_results.update(legacy_results)
++            self._dep_cache.set(ireq, json_results)
 +
-+        legacy_results = self.get_legacy_dependencies(ireq)
-+        json_results.update(legacy_results)
-+
-+        return json_results
++        return self._dep_cache.get(ireq)
 +
 +
 +    def get_legacy_dependencies(self, ireq):
          """
          Given a pinned or an editable InstallRequirement, returns a set of
          dependencies (also InstallRequirements, but not necessarily pinned).
-@@ -139,6 +236,18 @@ class PyPIRepository(BaseRepository):
+@@ -139,6 +347,21 @@ class PyPIRepository(BaseRepository):
          if not (ireq.editable or is_pinned_requirement(ireq)):
              raise TypeError('Expected pinned or editable InstallRequirement, got {}'.format(ireq))
  
@@ -216,13 +333,16 @@ index 1c4b943..e412a1f 100644
 +                    setup_requires = self.finder.get_extras_links(
 +                        dist.get_metadata_lines('requires.txt')
 +                    )
-+            except TypeError:
++                ireq.version = dist.version
++                ireq.name = dist.project_name
++                ireq.req = dist.as_requirement()
++            except (TypeError, ValueError):
 +                pass
 +
          if ireq not in self._dependencies_cache:
              if ireq.editable and (ireq.source_dir and os.path.exists(ireq.source_dir)):
                  # No download_dir for locally available editable requirements.
-@@ -164,11 +273,14 @@ class PyPIRepository(BaseRepository):
+@@ -164,11 +387,14 @@ class PyPIRepository(BaseRepository):
                      download_dir=download_dir,
                      wheel_download_dir=self._wheel_download_dir,
                      session=self.session,
@@ -239,7 +359,7 @@ index 1c4b943..e412a1f 100644
                  )
              except TypeError:
                  # Pip >= 10 (new resolver!)
-@@ -195,9 +307,39 @@ class PyPIRepository(BaseRepository):
+@@ -195,9 +421,39 @@ class PyPIRepository(BaseRepository):
                      isolated=False,
                      wheel_cache=self.wheel_cache,
                      use_user_site=False,
@@ -280,7 +400,7 @@ index 1c4b943..e412a1f 100644
              reqset.cleanup_files()
          return set(self._dependencies_cache[ireq])
  
-@@ -224,17 +366,10 @@ class PyPIRepository(BaseRepository):
+@@ -224,17 +480,10 @@ class PyPIRepository(BaseRepository):
          matching_candidates = candidates_by_version[matching_versions[0]]
  
          return {

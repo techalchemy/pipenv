@@ -3,9 +3,12 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import hashlib
+import json
 import os
+import sys
 from contextlib import contextmanager
 from shutil import rmtree
+from six import PY3, string_types
 
 from .._compat import (
     is_file_url,
@@ -18,16 +21,18 @@ from .._compat import (
     PyPI,
     InstallRequirement,
     SafeFileCache,
+    InstallRequirement,
 )
 
 from notpip._vendor.packaging.requirements import InvalidRequirement
+from notpip._vendor.packaging.version import parse as parse_version
 from notpip._vendor.pyparsing import ParseException
 
 from ..cache import CACHE_DIR
 from pipenv.environments import PIPENV_CACHE_DIR
 from ..exceptions import NoCandidateFound
-from ..utils import (fs_str, is_pinned_requirement, lookup_table,
-                     make_install_requirement)
+from ..utils import (fs_str, is_pinned_requirement, lookup_table, as_tuple,
+                     make_install_requirement, format_requirement)
 from .base import BaseRepository
 
 
@@ -41,6 +46,112 @@ try:
     from notpip._internal.cache import WheelCache
 except ImportError:
     from notpip.wheel import WheelCache
+
+
+class DependencyCache(SafeFileCache):
+    """Caches the dependencies of artifacts from specific indexes.
+
+    Should provide significant speedups.
+    """
+    def __init__(self, *args, **kwargs):
+        session = kwargs.pop('session')
+        index = kwargs.pop('index_url')
+        extra_index_urls = list(kwargs.pop('extra_index_urls', []))
+        py_version = '.'.join(str(digit) for digit in sys.version_info[:2])
+        cache_name = os.path.join(py_version, ''.join([index] + extra_index_urls))
+        self.session = session
+        kwargs.setdefault('directory', os.path.join(PIPENV_CACHE_DIR, 'dep-cache', cache_name))
+        super(DependencyCache, self).__init__(*args, **kwargs)
+
+    @staticmethod
+    def as_key(ireq):
+        try:
+            name, version, extras = as_tuple(ireq)
+        except TypeError:
+            if (hasattr(ireq, 'name') or hasattr(ireq, 'project_name')) and hasattr(ireq, 'version'):
+                name = getattr(ireq, 'name', getattr(ireq, 'project_name'))
+                version = ireq.version
+            else:
+                try:
+                    dist = ireq.get_dist()
+                    name = dist.project_name
+                    version = dist.version
+                except (TypeError, ValueError):
+                    name = ireq.link.egg_fragment
+                    if not name:
+                        name, version = ireq.link.filename.rsplit('-', 1)
+                    else:
+                        version = ireq.link.show_url
+            extras = ireq.extras
+        if not extras:
+            extras_string = ""
+        else:
+            extras_string = "[{}]".format(",".join(extras))
+        line = format_requirement(ireq, marker=ireq.markers)
+        return name, "{}{}".format(version, extras_string), line
+
+    @staticmethod
+    def serialize_req(ireq):
+        line = None
+        if isinstance(ireq, InstallRequirement):
+            name, version_w_extras, line = DependencyCache.as_key(ireq)
+        return line or format_requirement(ireq, marker=ireq.markers)
+
+    @staticmethod
+    def unserialize_req(ireq):
+        if not ireq:
+            return
+        if isinstance(ireq, InstallRequirement):
+            return ireq
+        if ireq.startswith('-e '):
+            req = InstallRequirement.from_editable(ireq.lstrip('-e '))
+        else:
+            req = InstallRequirement.from_line(ireq)
+        return req
+
+    @staticmethod
+    def serialize_set(req_set):
+        deps = [DependencyCache.serialize_req(ireq) for ireq in req_set]
+        return deps
+
+    @staticmethod
+    def unserialize_set(req_set):
+        new_set = set()
+        for ireq in req_set:
+            new_set.add(DependencyCache.unserialize_req(ireq))
+        return new_set
+
+    def set(self, key, value, *args, **kwargs):
+        if isinstance(key, string_types):
+            # for stringified 'six==x.y[extras] from file:///location
+            key = InstallRequirement.from_line(key.split('from')[0])
+            name, version_w_extras, line = DependencyCache.as_key(key)
+
+        elif isinstance(key, list) or isinstance(key, tuple):
+            name, version_w_extras, line = key
+        else:
+            name, version_w_extras, line = DependencyCache.as_key(key)
+        value = self.serialize_set(value)
+        version_dict = {version_w_extras: value}
+        version_dict = json.dumps(version_dict)
+        if PY3:
+            version_dict = bytes(version_dict, 'utf-8')
+        super(DependencyCache, self).set(name, version_dict, *args, **kwargs)
+
+    def get(self, key, *args, **kwargs):
+        from six import string_types
+        if not isinstance(key, string_types):
+            name, version_w_extras, line = DependencyCache.as_key(key)
+        pkg = super(DependencyCache, self).get(name, *args, **kwargs)
+        req_set = json.loads(pkg, encoding='utf-8').get(version_w_extras) if pkg else None
+        if req_set is None:
+            return
+        return self.unserialize_set(req_set)
+
+    def delete(self, key, *args, **kwargs):
+        if not isinstance(key, string_types):
+            key, _, _ = DependencyCache.as_key(key)
+        super(DependencyCache, self).delete(key, *args, **kwargs)
 
 
 class HashCache(SafeFileCache):
@@ -95,6 +206,7 @@ class PyPIRepository(BaseRepository):
         index_urls = [pip_options.index_url] + pip_options.extra_index_urls
         if pip_options.no_index:
             index_urls = []
+        self.indexes = index_urls
 
         self.finder = PackageFinder(
             find_links=pip_options.find_links,
@@ -119,6 +231,7 @@ class PyPIRepository(BaseRepository):
 
         # stores *full* path + fragment => sha256
         self._hash_cache = HashCache(session=session)
+        self._dep_cache = DependencyCache(session=session, index_url=pip_options.index_url, extra_index_urls=pip_options.extra_index_urls)
 
         # Setup file paths
         self.freshen_build_caches()
@@ -194,7 +307,7 @@ class PyPIRepository(BaseRepository):
                 r = self.session.get(url)
 
                 # TODO: Latest isn't always latest.
-                latest = list(r.json()['releases'].keys())[-1]
+                latest = sorted(list(r.json()['releases'].keys()), reverse=True)[-1]
                 if str(ireq.req.specifier) == '=={0}'.format(latest):
                     latest_url = 'https://pypi.org/pypi/{0}/{1}/json'.format(ireq.req.name, latest)
                     latest_requires = self.session.get(latest_url)
@@ -214,17 +327,19 @@ class PyPIRepository(BaseRepository):
 
     def get_dependencies(self, ireq):
         json_results = set()
+        cached_deps = self._dep_cache.get(ireq)
+        if cached_deps is None:
+            if self.use_json:
+                try:
+                    json_results = self.get_json_dependencies(ireq)
+                except TypeError:
+                    json_results = set()
 
-        if self.use_json:
-            try:
-                json_results = self.get_json_dependencies(ireq)
-            except TypeError:
-                json_results = set()
+            legacy_results = self.get_legacy_dependencies(ireq)
+            json_results.update(legacy_results)
+            self._dep_cache.set(ireq, json_results)
 
-        legacy_results = self.get_legacy_dependencies(ireq)
-        json_results.update(legacy_results)
-
-        return json_results
+        return self._dep_cache.get(ireq)
 
 
     def get_legacy_dependencies(self, ireq):
@@ -245,7 +360,10 @@ class PyPIRepository(BaseRepository):
                     setup_requires = self.finder.get_extras_links(
                         dist.get_metadata_lines('requires.txt')
                     )
-            except TypeError:
+                ireq.version = dist.version
+                ireq.project_name = dist.project_name
+                ireq.req = dist.as_requirement()
+            except (TypeError, ValueError):
                 pass
 
         if ireq not in self._dependencies_cache:
