@@ -517,3 +517,32 @@ index c2290ab9..bea31585 100644
  
  logger = logging.getLogger(__name__)
  
+diff --git a/src/pip/_internal/operations/prepare.py b/src/pip/_internal/operations/prepare.py
+index 27e3a5dd..0be76f70 100644
+--- a/src/pip/_internal/operations/prepare.py
++++ b/src/pip/_internal/operations/prepare.py
+@@ -233,15 +233,15 @@ class RequirementPreparer(object):
+             # FIXME: this won't upgrade when there's an existing
+             # package unpacked in `req.source_dir`
+             # package unpacked in `req.source_dir`
+-            if os.path.exists(os.path.join(req.source_dir, 'setup.py')):
+-                raise PreviousBuildDirError(
+-                    "pip can't proceed with requirements '%s' due to a"
+-                    " pre-existing build directory (%s). This is "
+-                    "likely due to a previous installation that failed"
+-                    ". pip is being responsible and not assuming it "
+-                    "can delete this. Please delete it and try again."
+-                    % (req, req.source_dir)
+-                )
++            # if os.path.exists(os.path.join(req.source_dir, 'setup.py')):
++            #     raise PreviousBuildDirError(
++            #         "pip can't proceed with requirements '%s' due to a"
++            #         " pre-existing build directory (%s). This is "
++            #         "likely due to a previous installation that failed"
++            #         ". pip is being responsible and not assuming it "
++            #         "can delete this. Please delete it and try again."
++            #         % (req, req.source_dir)
++            #     )
+             req.populate_link(finder, upgrade_allowed, require_hashes)
+ 
+             # We can't hit this spot and have populate_link return None.
