@@ -24,7 +24,7 @@ from .._compat import (
     InstallRequirement,
 )
 
-from notpip._vendor.packaging.requirements import InvalidRequirement
+from notpip._vendor.packaging.requirements import InvalidRequirement, Requirement
 from notpip._vendor.packaging.version import Version, InvalidVersion
 from notpip._vendor.pyparsing import ParseException
 
@@ -32,7 +32,7 @@ from ..cache import CACHE_DIR
 from pipenv.environments import PIPENV_CACHE_DIR
 from ..exceptions import NoCandidateFound
 from ..utils import (fs_str, is_pinned_requirement, lookup_table, as_tuple,
-                     make_install_requirement, format_requirement)
+                     make_install_requirement, format_requirement, dedup)
 from .base import BaseRepository
 
 
@@ -64,31 +64,41 @@ class DependencyCache(SafeFileCache):
         super(DependencyCache, self).__init__(*args, **kwargs)
 
     @staticmethod
+    def split_name_and_version(link):
+        filename = link.filename.rstrip(link.ext)
+        name, version = filename.rsplit('-', 1)
+        if '.' not in version and '-' in name:
+            name, _version = name.rsplit('-', 1)
+        try:
+            Version('{0}-{1}'.format(_version, version))
+            version = '{0}-{1}'.format(_version, version)
+        except InvalidVersion:
+            name = '{0}-{1}'.format(name, _version)
+        return name, version
+
+    @staticmethod
+    def get_name_and_version(ireq):
+        name = None
+        version = None
+        if hasattr(ireq, 'name') or hasattr(ireq, 'project_name'):
+            name = getattr(ireq, 'name', getattr(ireq, 'project_name', None))
+        if not name:
+            if ireq.link.egg_fragment:
+                name = ireq.link.egg_fragment
+            else:
+                name, _version = DependencyCache.split_name_and_version(ireq.link)
+        if hasattr(ireq, 'version') or (hasattr(ireq, 'req') and hasattr(ireq.req, 'version')):
+            version = getattr(ireq, 'version', getattr(ireq.req, 'version'))
+        if not version:
+            version = ireq.link.show_url
+        return name, version
+
+    @staticmethod
     def as_key(ireq):
         try:
             name, version, extras = as_tuple(ireq)
         except TypeError:
-            if (hasattr(ireq, 'name') or hasattr(ireq, 'project_name')) and hasattr(ireq, 'version'):
-                name = getattr(ireq, 'name', getattr(ireq, 'project_name'))
-                version = ireq.version
-            else:
-                try:
-                    dist = ireq.get_dist()
-                    name = dist.project_name
-                    version = dist.version
-                except (TypeError, ValueError):
-                    name = ireq.link.egg_fragment
-                    if not name:
-                        name, version = ireq.link.filename.rsplit('-', 1)
-                        if '.' not in version and '-' in name:
-                            name, _version = name.rsplit('-', 1)
-                            try:
-                                Version('{0}-{1}'.format(_version, version))
-                                version = '{0}-{1}'.format(_version, version)
-                            except InvalidVersion:
-                                name = '{0}-{1}'.format(name, _version)
-                    else:
-                        version = ireq.link.show_url
+            name, version = DependencyCache.get_name_and_version(ireq)
             extras = ireq.extras
         if not extras:
             extras_string = ""
@@ -101,7 +111,17 @@ class DependencyCache(SafeFileCache):
         marker = None
         if not ireq.editable:
             marker = ireq.markers
-        return format_requirement(ireq, marker=marker)
+        if not ireq.name:
+            name, version = DependencyCache.get_name_and_version(ireq)
+            req = Requirement(name)
+            req.extras = ireq.req.extras
+            req.specifier = ireq.req.specifier
+            req.marker = ireq.req.marker
+            ireq.req = req
+        formatted = format_requirement(ireq, marker=marker)
+        if ';' in formatted:
+            formatted = '; '.join(dedup([m.strip() for m in formatted.split(';')]))
+        return formatted
 
     @staticmethod
     def unserialize_req(ireq):
@@ -111,7 +131,15 @@ class DependencyCache(SafeFileCache):
             return ireq
         if ireq.startswith('-e '):
             req = InstallRequirement.from_editable(ireq.lstrip('-e '))
-            req.req = req.get_dist().as_requirement()
+            if not req.name:
+                try:
+                    req.req = req.get_dist().as_requirement()
+                except (ValueError, TypeError):
+                    name = req.link.egg_fragment
+                    new_req = Requirement(name)
+                    new_req.extras = req.req.extras
+                    new_req.marker = req.req.marker
+                    req.req = new_req
         else:
             req = InstallRequirement.from_line(ireq)
         return req
@@ -132,10 +160,10 @@ class DependencyCache(SafeFileCache):
         if isinstance(key, string_types):
             # for stringified 'six==x.y[extras] from file:///location
             key = InstallRequirement.from_line(key.split('from')[0])
-            name, version_w_extras, line = DependencyCache.as_key(key)
+            name, version_w_extras = DependencyCache.as_key(key)
 
         elif isinstance(key, list) or isinstance(key, tuple):
-            name, version_w_extras, line = key
+            name, version_w_extras = key
         else:
             name, version_w_extras = DependencyCache.as_key(key)
         value = self.serialize_set(value)
