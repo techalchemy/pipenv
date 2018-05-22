@@ -66,14 +66,17 @@ class DependencyCache(SafeFileCache):
     @staticmethod
     def split_name_and_version(link):
         filename = link.filename.rstrip(link.ext)
+        name = filename
+        if '-' not in filename:
+            return name, None
         name, version = filename.rsplit('-', 1)
         if '.' not in version and '-' in name:
             name, _version = name.rsplit('-', 1)
-        try:
-            Version('{0}-{1}'.format(_version, version))
-            version = '{0}-{1}'.format(_version, version)
-        except InvalidVersion:
-            name = '{0}-{1}'.format(name, _version)
+            try:
+                Version('{0}-{1}'.format(_version, version))
+                version = '{0}-{1}'.format(_version, version)
+            except InvalidVersion:
+                name = '{0}-{1}'.format(name, _version)
         return name, version
 
     @staticmethod
@@ -88,7 +91,7 @@ class DependencyCache(SafeFileCache):
             else:
                 name, _version = DependencyCache.split_name_and_version(ireq.link)
         if hasattr(ireq, 'version') or (hasattr(ireq, 'req') and hasattr(ireq.req, 'version')):
-            version = getattr(ireq, 'version', getattr(ireq.req, 'version'))
+            version = getattr(ireq, 'version', getattr(ireq.req, 'version', None))
         if not version:
             version = ireq.link.show_url
         return name, version
