@@ -25,7 +25,7 @@ from .._compat import (
 )
 
 from notpip._vendor.packaging.requirements import InvalidRequirement
-from notpip._vendor.packaging.version import parse as parse_version
+from notpip._vendor.packaging.version import Version, InvalidVersion
 from notpip._vendor.pyparsing import ParseException
 
 from ..cache import CACHE_DIR
@@ -80,6 +80,13 @@ class DependencyCache(SafeFileCache):
                     name = ireq.link.egg_fragment
                     if not name:
                         name, version = ireq.link.filename.rsplit('-', 1)
+                        if '.' not in version and '-' in name:
+                            name, _version = name.rsplit('-', 1)
+                            try:
+                                Version('{0}-{1}'.format(_version, version))
+                                version = '{0}-{1}'.format(_version, version)
+                            except InvalidVersion:
+                                name = '{0}-{1}'.format(name, _version)
                     else:
                         version = ireq.link.show_url
             extras = ireq.extras
@@ -87,15 +94,14 @@ class DependencyCache(SafeFileCache):
             extras_string = ""
         else:
             extras_string = "[{}]".format(",".join(extras))
-        line = format_requirement(ireq, marker=ireq.markers)
-        return name, "{}{}".format(version, extras_string), line
+        return name, "{}{}".format(version, extras_string)
 
     @staticmethod
     def serialize_req(ireq):
-        line = None
-        if isinstance(ireq, InstallRequirement):
-            name, version_w_extras, line = DependencyCache.as_key(ireq)
-        return line or format_requirement(ireq, marker=ireq.markers)
+        marker = None
+        if not ireq.editable:
+            marker = ireq.markers
+        return format_requirement(ireq, marker=marker)
 
     @staticmethod
     def unserialize_req(ireq):
@@ -105,6 +111,7 @@ class DependencyCache(SafeFileCache):
             return ireq
         if ireq.startswith('-e '):
             req = InstallRequirement.from_editable(ireq.lstrip('-e '))
+            req.req = req.get_dist().as_requirement()
         else:
             req = InstallRequirement.from_line(ireq)
         return req
@@ -130,7 +137,7 @@ class DependencyCache(SafeFileCache):
         elif isinstance(key, list) or isinstance(key, tuple):
             name, version_w_extras, line = key
         else:
-            name, version_w_extras, line = DependencyCache.as_key(key)
+            name, version_w_extras = DependencyCache.as_key(key)
         value = self.serialize_set(value)
         version_dict = {version_w_extras: value}
         version_dict = json.dumps(version_dict)
@@ -141,7 +148,7 @@ class DependencyCache(SafeFileCache):
     def get(self, key, *args, **kwargs):
         from six import string_types
         if not isinstance(key, string_types):
-            name, version_w_extras, line = DependencyCache.as_key(key)
+            name, version_w_extras = DependencyCache.as_key(key)
         pkg = super(DependencyCache, self).get(name, *args, **kwargs)
         req_set = json.loads(pkg, encoding='utf-8').get(version_w_extras) if pkg else None
         if req_set is None:
