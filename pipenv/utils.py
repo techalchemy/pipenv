@@ -318,7 +318,7 @@ def actually_resolve_reps(
     from pipenv.patched.piptools.scripts.compile import get_pip_command
     from pipenv.patched.piptools import logging as piptools_logging
     from pipenv.patched.piptools.exceptions import NoCandidateFound
-    from ._compat import TemporaryDirectory
+    from ._compat import TemporaryDirectory, NamedTemporaryFile
 
     class PipCommand(basecommand.Command):
         """Needed for pip-tools."""
@@ -336,16 +336,13 @@ def actually_resolve_reps(
                     dep[len('-e '):]
                 )
             else:
-                fd, t = tempfile.mkstemp(
-                    prefix='pipenv-', suffix='-requirement.txt', dir=req_dir.name
-                )
-                with os.fdopen(fd, 'w') as f:
-                    f.write(dep)
+                t = None
+                with NamedTemporaryFile(mode='w', prefix='pipenv-', suffix='requirement.txt', dir=req_dir.name, delete=False) as f:
+                    f.write(u'{0}'.format(dep))
+                    t = f.name
                 constraint = [
                     c for c in req.parse_requirements(t, session=pip_requests)
-                ][
-                    0
-                ]
+                ][0]
             # extra_constraints = []
             if ' -i ' in dep:
                 index_lookup[constraint.name] = project.get_source(
@@ -356,9 +353,7 @@ def actually_resolve_reps(
             if constraint.markers:
                 markers_lookup[constraint.name] = str(
                     constraint.markers
-                ).replace(
-                    '"', "'"
-                )
+                ).replace('"', "'")
             constraints.append(constraint)
     pip_command = get_pip_command()
     pip_args = []
@@ -407,7 +402,8 @@ def actually_resolve_reps(
                     'Please check your version specifier and version number. See PEP440 for more information.'
                 )
             )
-        req_dir.cleanup()
+        if cleanup_req_dir:
+            req_dir.cleanup()
         raise RuntimeError
     if cleanup_req_dir:
         req_dir.cleanup()
