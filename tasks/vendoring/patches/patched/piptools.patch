@@ -19,7 +19,7 @@ index 4e6174c..75f9b49 100644
  # NOTE
  # We used to store the cache dir under ~/.pip-tools, which is not the
 diff --git a/pipenv/patched/piptools/repositories/pypi.py b/pipenv/patched/piptools/repositories/pypi.py
-index 1c4b943..7807192 100644
+index 1c4b943..55a73e1 100644
 --- a/pipenv/patched/piptools/repositories/pypi.py
 +++ b/pipenv/patched/piptools/repositories/pypi.py
 @@ -3,9 +3,12 @@ from __future__ import (absolute_import, division, print_function,
@@ -43,11 +43,11 @@ index 1c4b943..7807192 100644
 +    PyPI,
 +    InstallRequirement,
 +    SafeFileCache,
-+    InstallRequirement,
  )
  
 +from pip._vendor.packaging.requirements import InvalidRequirement, Requirement
 +from pip._vendor.packaging.version import Version, InvalidVersion
++from pip._vendor.packaging.markers import Marker
 +from pip._vendor.pyparsing import ParseException
 +
  from ..cache import CACHE_DIR
@@ -250,7 +250,7 @@ index 1c4b943..7807192 100644
      changed/configured on the Finder.
      """
 -    def __init__(self, pip_options, session):
-+    def __init__(self, pip_options, session, use_json=False):
++    def __init__(self, pip_options, session, use_json=True):
          self.session = session
 +        self.use_json = use_json
          self.pip_options = pip_options
@@ -283,9 +283,19 @@ index 1c4b943..7807192 100644
  
      def freshen_build_caches(self):
          """
-@@ -116,8 +312,11 @@ class PyPIRepository(BaseRepository):
+@@ -114,10 +310,20 @@ class PyPIRepository(BaseRepository):
+         if ireq.editable:
+             return ireq  # return itself as the best match
  
-         all_candidates = self.find_all_candidates(ireq.name)
+-        all_candidates = self.find_all_candidates(ireq.name)
++        _all_candidates = self.find_all_candidates(ireq.name)
++        all_candidates = []
++        for c in _all_candidates:
++            if c.requires_python:
++                m = Marker('python_version == "{0}"'.format(c.requires_python))
++                if not m.evaluate():
++                    continue
++            all_candidates.append(c)
          candidates_by_version = lookup_table(all_candidates, key=lambda c: c.version, unique=True)
 -        matching_versions = ireq.specifier.filter((candidate.version for candidate in all_candidates),
 +        try:
@@ -296,7 +306,7 @@ index 1c4b943..7807192 100644
  
          # Reuses pip's internal candidate sort key to sort
          matching_candidates = [candidates_by_version[ver] for ver in matching_versions]
-@@ -126,11 +325,62 @@ class PyPIRepository(BaseRepository):
+@@ -126,11 +332,62 @@ class PyPIRepository(BaseRepository):
          best_candidate = max(matching_candidates, key=self.finder._candidate_sort_key)
  
          # Turn the candidate into a pinned InstallRequirement
@@ -344,7 +354,7 @@ index 1c4b943..7807192 100644
      def get_dependencies(self, ireq):
 +        json_results = set()
 +        cached_deps = self._dep_cache.get(ireq)
-+        if cached_deps is None:
++        if not cached_deps:
 +            if self.use_json:
 +                try:
 +                    json_results = self.get_json_dependencies(ireq)
@@ -355,17 +365,18 @@ index 1c4b943..7807192 100644
 +            json_results.update(legacy_results)
 +            self._dep_cache.set(ireq, json_results)
 +
-+        return self._dep_cache.get(ireq)
++        return json_results
 +
 +
 +    def get_legacy_dependencies(self, ireq):
          """
          Given a pinned or an editable InstallRequirement, returns a set of
          dependencies (also InstallRequirements, but not necessarily pinned).
-@@ -139,6 +389,21 @@ class PyPIRepository(BaseRepository):
+@@ -139,7 +396,22 @@ class PyPIRepository(BaseRepository):
          if not (ireq.editable or is_pinned_requirement(ireq)):
              raise TypeError('Expected pinned or editable InstallRequirement, got {}'.format(ireq))
  
+-        if ireq not in self._dependencies_cache:
 +        # Collect setup_requires info from local eggs.
 +        setup_requires = {}
 +        if ireq.editable:
@@ -381,10 +392,11 @@ index 1c4b943..7807192 100644
 +            except (TypeError, ValueError):
 +                pass
 +
-         if ireq not in self._dependencies_cache:
++        if ireq not in self._dependencies_cache or ireq not in self._dep_cache:
              if ireq.editable and (ireq.source_dir and os.path.exists(ireq.source_dir)):
                  # No download_dir for locally available editable requirements.
-@@ -164,11 +429,14 @@ class PyPIRepository(BaseRepository):
+                 # If a download_dir is passed, pip will  unnecessarely
+@@ -164,11 +436,14 @@ class PyPIRepository(BaseRepository):
                      download_dir=download_dir,
                      wheel_download_dir=self._wheel_download_dir,
                      session=self.session,
@@ -401,7 +413,7 @@ index 1c4b943..7807192 100644
                  )
              except TypeError:
                  # Pip >= 10 (new resolver!)
-@@ -195,9 +463,39 @@ class PyPIRepository(BaseRepository):
+@@ -195,9 +470,40 @@ class PyPIRepository(BaseRepository):
                      isolated=False,
                      wheel_cache=self.wheel_cache,
                      use_user_site=False,
@@ -439,10 +451,11 @@ index 1c4b943..7807192 100644
 +                result = [new_req]
 +
 +            self._dependencies_cache[ireq] = result
++            self._dep_cache.set(ireq, result)
              reqset.cleanup_files()
          return set(self._dependencies_cache[ireq])
  
-@@ -224,17 +522,10 @@ class PyPIRepository(BaseRepository):
+@@ -224,17 +530,10 @@ class PyPIRepository(BaseRepository):
          matching_candidates = candidates_by_version[matching_versions[0]]
  
          return {

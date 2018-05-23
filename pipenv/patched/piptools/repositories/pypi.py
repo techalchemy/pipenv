@@ -21,11 +21,11 @@ from .._compat import (
     PyPI,
     InstallRequirement,
     SafeFileCache,
-    InstallRequirement,
 )
 
 from notpip._vendor.packaging.requirements import InvalidRequirement, Requirement
 from notpip._vendor.packaging.version import Version, InvalidVersion
+from notpip._vendor.packaging.markers import Marker
 from notpip._vendor.pyparsing import ParseException
 
 from ..cache import CACHE_DIR
@@ -235,7 +235,7 @@ class PyPIRepository(BaseRepository):
     config), but any other PyPI mirror can be used if index_urls is
     changed/configured on the Finder.
     """
-    def __init__(self, pip_options, session, use_json=False):
+    def __init__(self, pip_options, session, use_json=True):
         self.session = session
         self.use_json = use_json
         self.pip_options = pip_options
@@ -310,7 +310,14 @@ class PyPIRepository(BaseRepository):
         if ireq.editable:
             return ireq  # return itself as the best match
 
-        all_candidates = self.find_all_candidates(ireq.name)
+        _all_candidates = self.find_all_candidates(ireq.name)
+        all_candidates = []
+        for c in _all_candidates:
+            if c.requires_python:
+                m = Marker('python_version == "{0}"'.format(c.requires_python))
+                if not m.evaluate():
+                    continue
+            all_candidates.append(c)
         candidates_by_version = lookup_table(all_candidates, key=lambda c: c.version, unique=True)
         try:
             matching_versions = ireq.specifier.filter((candidate.version for candidate in all_candidates),
@@ -366,7 +373,7 @@ class PyPIRepository(BaseRepository):
     def get_dependencies(self, ireq):
         json_results = set()
         cached_deps = self._dep_cache.get(ireq)
-        if cached_deps is None:
+        if not cached_deps:
             if self.use_json:
                 try:
                     json_results = self.get_json_dependencies(ireq)
@@ -377,7 +384,7 @@ class PyPIRepository(BaseRepository):
             json_results.update(legacy_results)
             self._dep_cache.set(ireq, json_results)
 
-        return self._dep_cache.get(ireq)
+        return json_results
 
 
     def get_legacy_dependencies(self, ireq):
@@ -404,7 +411,7 @@ class PyPIRepository(BaseRepository):
             except (TypeError, ValueError):
                 pass
 
-        if ireq not in self._dependencies_cache:
+        if ireq not in self._dependencies_cache or ireq not in self._dep_cache:
             if ireq.editable and (ireq.source_dir and os.path.exists(ireq.source_dir)):
                 # No download_dir for locally available editable requirements.
                 # If a download_dir is passed, pip will  unnecessarely
@@ -496,6 +503,7 @@ class PyPIRepository(BaseRepository):
                 result = [new_req]
 
             self._dependencies_cache[ireq] = result
+            self._dep_cache.set(ireq, result)
             reqset.cleanup_files()
         return set(self._dependencies_cache[ireq])
 
